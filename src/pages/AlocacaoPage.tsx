@@ -536,7 +536,7 @@ export default function AlocacaoPage() {
     URL.revokeObjectURL(url);
   };
 
-  /* ===== Exportar PDF (Tela + ERP) ===== */
+  /* ===== Exportar PDF (Tela + ERP) — 1 página por colaborador ===== */
   const exportPlanejamentoPdf = () => {
     if (!colabs.length) {
       alert("Nenhum colaborador para exportar.");
@@ -570,39 +570,9 @@ export default function AlocacaoPage() {
     });
 
     const pageWidth = doc.internal.pageSize.getWidth();
-    let cursorY = 15;
-
-    // Cabeçalho
-    try {
-      if (LOGO_BASE64 && LOGO_BASE64 !== "data:image/png;base64,SEU_LOGO_AQUI") {
-        doc.addImage(LOGO_BASE64, "PNG", 10, 8, 30, 10);
-      }
-    } catch {
-      // ignora problema na logo
-    }
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(14);
-    doc.text("Planejamento de Atividades por Colaborador", pageWidth / 2, 15, {
-      align: "center",
-    });
-
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
     const hojeStr = toBR(new Date().toISOString().slice(0, 10));
-    doc.text(`OP: ${opId ?? ""}`, pageWidth / 2, 21, { align: "center" });
-    doc.text(
-      `Data do planejamento: ${toBR(
-        dataPlanejamento
-      )}  •  Gerado em: ${hojeStr}`,
-      pageWidth / 2,
-      26,
-      { align: "center" }
-    );
+    let anyPrinted = false;
 
-    cursorY = 32;
-
-    // Para cada colaborador, junta tela + ERP na data do planejamento
     colabs.forEach((colab) => {
       // atividades da tela (alocadas) na data do planejamento
       const telaAtvs = atividades
@@ -624,15 +594,53 @@ export default function AlocacaoPage() {
         return; // pula colaborador sem nada na data
       }
 
-      if (cursorY > 260) {
+      // nova página para cada colaborador
+      if (anyPrinted) {
         doc.addPage();
-        cursorY = 15;
       }
+      anyPrinted = true;
+
+      // Cabeçalho por página (com logo, OP, data planejamento)
+      try {
+        if (
+          LOGO_BASE64 &&
+          LOGO_BASE64 !== "data:image/png;base64,SEU_LOGO_AQUI"
+        ) {
+          doc.addImage(LOGO_BASE64, "PNG", 10, 8, 30, 10);
+        }
+      } catch {
+        // ignora problema na logo
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text(
+        "Planejamento de Atividades por Colaborador",
+        pageWidth / 2,
+        15,
+        {
+          align: "center",
+        }
+      );
+
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text(`OP: ${opId ?? ""}`, pageWidth / 2, 21, { align: "center" });
+      doc.text(
+        `Data do planejamento: ${toBR(
+          dataPlanejamento
+        )}  •  Gerado em: ${hojeStr}`,
+        pageWidth / 2,
+        26,
+        { align: "center" }
+      );
+
+      let cursorY = 32;
 
       // Título por colaborador
       doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
-      doc.text(colab.nome, 14, cursorY);
+      doc.text(`Colaborador: ${colab.nome}`, 14, cursorY);
       doc.setFontSize(9);
       doc.setFont("helvetica", "normal");
 
@@ -652,7 +660,7 @@ export default function AlocacaoPage() {
         { align: "right" }
       );
 
-      cursorY += 4;
+      cursorY += 5;
 
       // Monta corpo da tabela: tela + ERP
       type BodyRow = [string, string, string, string, string, string, string];
@@ -715,20 +723,21 @@ export default function AlocacaoPage() {
         },
       });
 
-      cursorY = (doc as any).lastAutoTable.finalY + 8;
+      const finalY = (doc as any).lastAutoTable?.finalY ?? cursorY + 40;
+      let assinaturaY = finalY + 10;
 
-      // espaço para assinatura do colaborador
-      if (cursorY > 250) {
+      // se passar do limite, joga assinatura pra próxima página
+      if (assinaturaY > 260) {
         doc.addPage();
-        cursorY = 30;
+        assinaturaY = 30;
       }
+
       doc.setFontSize(9);
       doc.text(
         "Assinatura do colaborador: ________________________________",
         14,
-        cursorY
+        assinaturaY
       );
-      cursorY += 10;
     });
 
     doc.save(
@@ -970,7 +979,10 @@ export default function AlocacaoPage() {
           </div>
         </CardHeader>
         <CardContent className="grid grid-cols-12 gap-3">
+                      
+
           <div className="col-span-12 md:col-span-3">
+            <label className="text-xs text-muted-foreground">Buscar Atividade</label>
             <Input
               placeholder="Buscar atividade…"
               value={q}
@@ -1011,9 +1023,9 @@ export default function AlocacaoPage() {
             />
           </div>
           {/* Data do planejamento */}
-          <div className="col-span-6 md:col-span-3">
+          <div className="col-span-6 md:col-span-2">
             <label className="text-xs text-muted-foreground">
-              Data do planejamento (Gantt / Salvar / PDF)
+              Data do planejamento 
             </label>
             <Input
               type="date"
@@ -1136,7 +1148,7 @@ export default function AlocacaoPage() {
         </CardContent>
       </Card>
 
-      {/* Grade de colaboradores (AGORA filtrada pela dataPlanejamento) */}
+      {/* Grade de colaboradores (com badge Dia x Período) */}
       <Card>
         <CardHeader className="py-3">
           <h4 className="text-sm font-semibold">
@@ -1176,6 +1188,32 @@ export default function AlocacaoPage() {
                     (s, p) => s + p.qtd,
                     0
                   );
+                  const hhErpDia = erpDia.reduce(
+                    (s, p) => s + p.qtd / 60,
+                    0
+                  );
+
+                  // PERÍODO (ini-fin) para badge
+                  const telaPeriodo = atividades.filter(
+                    (a) =>
+                      a.alocadoPara === c.id &&
+                      a.dt >= ini &&
+                      a.dt <= fin
+                  );
+                  const hhTelaPeriodo = telaPeriodo.reduce(
+                    (s, a) => s + a.hhPrev,
+                    0
+                  );
+                  const erpPeriodo = (c.atividadesERP || []).filter(
+                    (p) => p.dt >= ini && p.dt <= fin
+                  );
+                  const hhErpPeriodo = erpPeriodo.reduce(
+                    (s, p) => s + p.qtd / 60,
+                    0
+                  );
+
+                  const hhDiaTotal = hhTelaDia + hhErpDia;
+                  const hhPeriodoTotal = hhTelaPeriodo + hhErpPeriodo;
 
                   return (
                     <div
@@ -1191,6 +1229,13 @@ export default function AlocacaoPage() {
                           <p className="text-[10px] text-muted-foreground truncate">
                             {c.cargo}
                           </p>
+                          <Badge
+                            variant="outline"
+                            className="mt-0.5 text-[9px] font-normal"
+                          >
+                            Dia: {hhDiaTotal.toFixed(1)}h • Período:{" "}
+                            {hhPeriodoTotal.toFixed(1)}h
+                          </Badge>
                         </div>
                       </div>
                       <div className="col-span-2 text-right">
