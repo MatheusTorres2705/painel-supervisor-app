@@ -66,16 +66,16 @@ export type PlanoAcaoCard = {
 /** ================== Mocks ================== */
 
 export const mockKpis = (): Kpis => ({
-  he: { disp: 1200, cons: 740 },
-  avancos: [{ op: "OP-2301", pct: 68 }],
+  he: { disp: 0, cons: 0 },
+  avancos: [{ op: "OP-2301", pct: 0 }],
   senioridade: [
     { nivel: "Júnior", qtd: 8 },
     { nivel: "Pleno", qtd: 5 },
     { nivel: "Sênior", qtd: 3 },
   ],
-  faltantes: { qtd: 37, total: 420 },
-  retrabalho: { pct: 3.2 },
-  assid: { pct: 92.4 },
+  faltantes: { qtd: 0, total: 0 },
+  retrabalho: { pct: 0 },
+  assid: { pct: 0 },
 });
 
 export const mockEquipe = (): MembroEquipe[] => [

@@ -16,6 +16,8 @@ import AlocacaoPage from "./pages/AlocacaoPage";
 import MateriaisPage from "./pages/MateriaisPage";
 import CalendarioPage from "./pages/CalendarioPage";
 import PlanoAcaoPage from "./pages/PlanoAcaoPage";
+import FuncionarioDetalhePage from "@/pages/FuncionarioDetalhePage";
+
 
 export default function App() {
   return (
@@ -101,8 +103,27 @@ export default function App() {
           {/* redirects */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          <Route
+  path="/equipe/:codfunc"
+  element={
+    <ProtectedRoute>
+      <Layout>
+        <FuncionarioDetalhePage />
+      </Layout>
+    </ProtectedRoute>
+  }
+/>
         </Routes>
       </BrowserRouter>
     </AuthProvider>
   );
 }
+
+
+
+/*  
+filtrar o turnos na alocacao ( noturno / diurno )
+filtrar o colaborador na alocacao ( fintrar por nome e setor )
+
+
+*/

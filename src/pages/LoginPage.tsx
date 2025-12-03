@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
 import { Eye, EyeOff } from "lucide-react";
-import logo from "@/assets/nx_boats.png"; // coloque sua logo em src/assets/logo.png
+import logo from "../assets/nx_boats.png"; // coloque sua logo em src/assets/logo.png
 
 const LoginPage: React.FC = () => {
   const { login } = useAuth();

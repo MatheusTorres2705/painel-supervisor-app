@@ -70,7 +70,9 @@ type SkillCatalogo = {
   descrprod: string;
 };
 
-function mapNivelToLabel(n: string | null | undefined): "Júnior" | "Pleno" | "Sênior" {
+function mapNivelToLabel(
+  n: string | null | undefined
+): "Júnior" | "Pleno" | "Sênior" {
   const v = (n || "").toUpperCase();
   if (v.startsWith("S")) return "Sênior";
   if (v.startsWith("P")) return "Pleno";
@@ -82,6 +84,10 @@ function disponibilidadeColor(hhFalta: number) {
   if (hhFalta > 1) return { dot: "bg-amber-500", label: "Atenção" };
   return { dot: "bg-emerald-500", label: "OK" };
 }
+
+// URL da foto por CODFUNC
+const fotoUrl = (codfunc: number) =>
+  `http://sankhya.nxboats.com.br:8180/mge/Funcionario@IMAGEM@CODEMP=1@CODFUNC=${codfunc}.dbimage`;
 
 export default function EquipePage() {
   const navigate = useNavigate();
@@ -98,10 +104,15 @@ export default function EquipePage() {
   const [sortAsc, setSortAsc] = useState(true);
 
   // ----------------- Habilidades (por colaborador) -----------------
-  const [skillsMap, setSkillsMap] = useState<Record<number, SkillColaborador[]>>({});
+  const [skillsMap, setSkillsMap] = useState<Record<number, SkillColaborador[]>>(
+    {}
+  );
   const [skillsOpenFor, setSkillsOpenFor] = useState<MembroEquipe | null>(null);
 
-  const [newSkill, setNewSkill] = useState<{ codprod: string; nivel: SkillNivel }>({
+  const [newSkill, setNewSkill] = useState<{
+    codprod: string;
+    nivel: SkillNivel;
+  }>({
     codprod: "",
     nivel: "Básico",
   });
@@ -122,7 +133,7 @@ export default function EquipePage() {
         setLoading(true);
         setErro(null);
 
-        const CODUSU_SUP = (user as any)?.codusu ?? 673;
+        const CODUSU_SUP = (user as any)?.codusu ?? 134;
 
         const sql = `
           SELECT 
@@ -140,6 +151,7 @@ export default function EquipePage() {
           JOIN TFPDEP DEP ON DEP.CODDEP = FUN.CODDEP
           JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
           WHERE FUN.USUVPJSUP = ${CODUSU_SUP}
+          and FUN.SITUACAO <> '0'
         `.trim();
 
         const rows = await obterReg(sql);
@@ -326,7 +338,9 @@ export default function EquipePage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `equipe_filtrada_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `equipe_filtrada_${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -343,9 +357,20 @@ export default function EquipePage() {
     navigate(`/atividades/alocacao/OP-0000?${qs}`);
   };
 
-  // URL da foto por CODFUNC
-  const fotoUrl = (codfunc: number) =>
-    `http://sankhya.nxboats.com.br:8180/mge/Funcionario@IMAGEM@CODEMP=1@CODFUNC=${codfunc}.dbimage`;
+  // ---- Navegar para Detalhes do Funcionário ----
+  const irParaDetalhes = (c: MembroEquipe) => {
+    navigate(`/equipe/${c.codfunc}`, {
+      state: {
+        membro: {
+          codfunc: c.codfunc,
+          nome: c.nome,
+          cargo: c.cargo,
+          depto: c.depto,
+          senior: c.senior,
+        },
+      },
+    });
+  };
 
   // ----------------- Ações Habilidades -----------------
   const abrirHabilidades = (c: MembroEquipe) => {
@@ -431,7 +456,10 @@ export default function EquipePage() {
 
       alert("Habilidade incluída com sucesso em AD_TFPFUNHAB.");
     } catch (e: any) {
-      console.error("[EquipePage] Erro ao chamar /api/sankhya/dataset/save:", e);
+      console.error(
+        "[EquipePage] Erro ao chamar /api/sankhya/dataset/save:",
+        e
+      );
       alert(
         "Erro ao adicionar habilidade no Sankhya.\n" +
           (e?.response?.data?.erro || e?.message || "")
@@ -470,21 +498,27 @@ export default function EquipePage() {
           <Button
             variant={senior === "Júnior" ? "default" : "outline"}
             size="sm"
-            onClick={() => setSenior(senior === "Júnior" ? "Todos" : "Júnior")}
+            onClick={() =>
+              setSenior(senior === "Júnior" ? "Todos" : "Júnior")
+            }
           >
             Júnior
           </Button>
           <Button
             variant={senior === "Pleno" ? "default" : "outline"}
             size="sm"
-            onClick={() => setSenior(senior === "Pleno" ? "Todos" : "Pleno")}
+            onClick={() =>
+              setSenior(senior === "Pleno" ? "Todos" : "Pleno")
+            }
           >
             Pleno
           </Button>
           <Button
             variant={senior === "Sênior" ? "default" : "outline"}
             size="sm"
-            onClick={() => setSenior(senior === "Sênior" ? "Todos" : "Sênior")}
+            onClick={() =>
+              setSenior(senior === "Sênior" ? "Todos" : "Sênior")
+            }
           >
             Sênior
           </Button>
@@ -499,23 +533,48 @@ export default function EquipePage() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setSortKey("rank")}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSortKey("rank")}
+          >
             Rank
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setSortKey("hhProd")}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSortKey("hhProd")}
+          >
             HH Prod
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setSortKey("hhFalta")}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSortKey("hhFalta")}
+          >
             HH Falta
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setSortKey("nome")}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSortKey("nome")}
+          >
             Nome
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setSortAsc((s) => !s)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSortAsc((s) => !s)}
+          >
             {sortAsc ? "Asc" : "Desc"}
           </Button>
 
-          <Button variant="secondary" size="sm" className="gap-2" onClick={exportCsv}>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="gap-2"
+            onClick={exportCsv}
+          >
             <Download className="h-4 w-4" />
             Exportar CSV
           </Button>
@@ -532,7 +591,9 @@ export default function EquipePage() {
         {erro && <div className="mb-3 text-sm text-red-600">{erro}</div>}
 
         {loading ? (
-          <div className="text-sm text-muted-foreground">Carregando equipe…</div>
+          <div className="text-sm text-muted-foreground">
+            Carregando equipe…
+          </div>
         ) : (
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
             {list.map((c) => {
@@ -553,7 +614,9 @@ export default function EquipePage() {
                         alt={c.nome}
                         referrerPolicy="no-referrer"
                         onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).style.display = "none";
+                          (
+                            e.currentTarget as HTMLImageElement
+                          ).style.display = "none";
                         }}
                       />
                       <AvatarFallback>
@@ -565,11 +628,19 @@ export default function EquipePage() {
                     </Avatar>
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-medium leading-tight text-sm">{c.nome}</p>
-                        <Badge variant="secondary" className="rounded-full text-[11px]">
+                        <p className="font-medium leading-tight text-sm">
+                          {c.nome}
+                        </p>
+                        <Badge
+                          variant="secondary"
+                          className="rounded-full text-[11px]"
+                        >
                           {c.senior}
                         </Badge>
-                        <Badge variant="outline" className="rounded-full text-[11px]">
+                        <Badge
+                          variant="outline"
+                          className="rounded-full text-[11px]"
+                        >
                           {disp.label}
                         </Badge>
                       </div>
@@ -585,20 +656,28 @@ export default function EquipePage() {
 
                   <CardContent className="grid grid-cols-3 gap-3 pt-1 pb-3">
                     <div>
-                      <p className="text-[11px] text-muted-foreground">HH produtivo</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        HH produtivo
+                      </p>
                       <p className="font-semibold text-sm">{c.hhProd} h</p>
                     </div>
                     <div>
-                      <p className="text-[11px] text-muted-foreground">HH falta</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        HH falta
+                      </p>
                       <p className="font-semibold text-sm">{c.hhFalta} h</p>
                     </div>
                     <div>
-                      <p className="text-[11px] text-muted-foreground">Ranking</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Ranking
+                      </p>
                       <p className="font-semibold text-sm">#{c.rank}</p>
                     </div>
 
                     <div className="col-span-3">
-                      <Progress value={Math.min(100, (c.hhProd / 160) * 100)} />
+                      <Progress
+                        value={Math.min(100, (c.hhProd / 160) * 100)}
+                      />
                       <p className="text-[11px] text-muted-foreground mt-1">
                         Capacidade usada no mês
                       </p>
@@ -609,9 +688,9 @@ export default function EquipePage() {
                         variant="outline"
                         size="sm"
                         className="gap-1 text-xs"
-                        onClick={() => irParaAlocacao(c)}
+                        onClick={() => irParaDetalhes(c)}
                       >
-                        Ver atividades{" "}
+                        Detalhes{" "}
                         <ChevronRight className="h-3.5 w-3.5" />
                       </Button>
                       <div className="flex gap-2">
@@ -659,7 +738,9 @@ export default function EquipePage() {
                     src={fotoUrl(skillsOpenFor.codfunc)}
                     alt={skillsOpenFor.nome}
                     onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).style.display = "none";
+                      (
+                        e.currentTarget as HTMLImageElement
+                      ).style.display = "none";
                     }}
                   />
                   <AvatarFallback>
@@ -739,7 +820,10 @@ export default function EquipePage() {
                             size="icon"
                             variant="ghost"
                             onClick={() =>
-                              removerSkill(skillsOpenFor.codfunc, s.codprod)
+                              removerSkill(
+                                skillsOpenFor.codfunc,
+                                s.codprod
+                              )
                             }
                             title="Remover habilidade"
                           >
@@ -758,7 +842,10 @@ export default function EquipePage() {
                 <div className="grid grid-cols-12 gap-2 items-center">
                   {/* Combobox com Command + Popover */}
                   <div className="col-span-7">
-                    <Popover open={habilidadeOpen} onOpenChange={setHabilidadeOpen}>
+                    <Popover
+                      open={habilidadeOpen}
+                      onOpenChange={setHabilidadeOpen}
+                    >
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
@@ -774,7 +861,7 @@ export default function EquipePage() {
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-[420px] p-0">
+                      <PopoverContent className="w-[420px] p-0 bg-white">
                         <Command>
                           <CommandInput placeholder="Buscar por código ou descrição..." />
                           <CommandList>
@@ -836,8 +923,7 @@ export default function EquipePage() {
                     <Button
                       className="w-full gap-1 text-xs"
                       onClick={() =>
-                        skillsOpenFor &&
-                        adicionarSkill(skillsOpenFor.codfunc)
+                        skillsOpenFor && adicionarSkill(skillsOpenFor.codfunc)
                       }
                       disabled={!newSkill.codprod}
                     >
