@@ -25,7 +25,11 @@ import {
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { cn } from "@/lib/utils";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 
 /* =================== Tipos =================== */
 type Etapa = "LAM" | "MON" | "PINT" | "ELE" | "ACB";
@@ -60,6 +64,7 @@ type Colab = {
   id: number;
   nome: string;
   cargo: string;
+  codSetor: number; // ✅ CAR.AD_CODUSU (setor do colaborador)
   senior: "Júnior" | "Pleno" | "Sênior";
   atividadesERP: AtividadeERP[];
 };
@@ -175,7 +180,7 @@ function buildBlocksForColab(
     .forEach((a) => {
       const qtdColabs = a.alocados.length || 1;
       const hhShare = a.hhPrev / qtdColabs;
-      const hh = Math.max(0.25, Math.round(hhShare * 10) / 10); // arredonda para 0.1h
+      const hh = Math.max(0.25, Math.round(hhShare * 10) / 10);
       tarefas.push({
         atividadeId: a.id,
         label: a.nome,
@@ -187,9 +192,9 @@ function buildBlocksForColab(
   // 2) Atividades já planejadas no ERP (AD_DETALCRONOGRAMAFUNC)
   const etapaErp = etapaFromCargo(colab.cargo);
   (colab.atividadesERP || []).forEach((p, idx) => {
-    const hh = Math.max(0.5, Math.round((p.qtd / 60) * 10) / 10); // minutos -> horas
+    const hh = Math.max(0.5, Math.round((p.qtd / 60) * 10) / 10);
     tarefas.push({
-      atividadeId: 100000 + colab.id * 1000 + idx, // id virtual único
+      atividadeId: 100000 + colab.id * 1000 + idx,
       label: `${p.codprod} - ${p.descrprod} (ERP)`,
       etapa: etapaErp,
       hh,
@@ -228,12 +233,14 @@ type ColabMultiSelectProps = {
   atividade: Atividade;
   colabs: Colab[];
   onChange: (alocados: number[]) => void;
+  setorAlocarLabel?: string; // opcional: mostrar “filtrado por setor”
 };
 
 const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
   atividade,
   colabs,
   onChange,
+  setorAlocarLabel,
 }) => {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -285,7 +292,16 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
           <ChevronsUpDown className="ml-1 h-3 w-3 opacity-60" />
         </button>
       </PopoverTrigger>
+
       <PopoverContent className="w-80 p-2">
+        {/* indicador de filtro */}
+        {setorAlocarLabel ? (
+          <div className="mb-2 text-[11px] text-muted-foreground">
+            Filtrado por:{" "}
+            <span className="font-medium text-foreground">{setorAlocarLabel}</span>
+          </div>
+        ) : null}
+
         {/* Busca */}
         <div className="mb-2">
           <Input
@@ -313,7 +329,9 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
                 <span
                   className={cn(
                     "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                    selected ? "bg-primary text-primary-foreground" : "bg-background"
+                    selected
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-background"
                   )}
                 >
                   {selected && <Check className="h-3 w-3" />}
@@ -324,14 +342,15 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
               </button>
             );
           })}
+
           {!filtrados.length && (
             <div className="px-2 py-1 text-[11px] text-muted-foreground">
-              Nenhum colaborador encontrado.
+              Nenhum colaborador encontrado (verifique o filtro de setor).
             </div>
           )}
         </div>
 
-        {/* Selecionados com possibilidade de exclusão */}
+        {/* Selecionados */}
         {selecionados.length > 0 && (
           <div className="mt-2 border-t pt-2">
             <div className="mb-1 text-[11px] font-medium">
@@ -412,6 +431,9 @@ export default function AlocacaoPage() {
 
   const [q, setQ] = useState("");
   const [filtroSetor, setFiltroSetor] = useState<string>("Todos");
+
+  // ✅ novo filtro: setor para alocar (filtra funcionários no “Alocar para”)
+  const [setorAlocar, setSetorAlocar] = useState<string>("Todos");
 
   const preNome = sp.get("colabNome");
 
@@ -503,18 +525,22 @@ export default function AlocacaoPage() {
             tempoMin,
             codusu,
             setor: setorNome,
-            alocados: [], // inicia sem colaboradores
+            alocados: [],
           };
         });
 
-        // 2) Colaboradores vinculados ao supervisor
+        // 2) Colaboradores (agora traz CAR.AD_CODUSU para filtrar setor)
         const CODUSU_SUP_QRY = CODUSU_SUP;
+
         const sqlColabs = `
           SELECT DISTINCT
             FUN.CODFUNC,
-            FUN.NOMEFUNC
+            FUN.NOMEFUNC,
+            CAR.DESCRCARGO,
+            CAR.AD_CODUSU
           FROM TFPFUN FUN
           LEFT JOIN AD_DETALCRONOGRAMAFUNC F ON FUN.CODFUNC = F.CODFUNC
+          JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
           WHERE FUN.USUVPJSUP = ${CODUSU_SUP_QRY}
           ORDER BY FUN.NOMEFUNC
         `.trim();
@@ -565,7 +591,8 @@ export default function AlocacaoPage() {
           return {
             id: codfunc,
             nome: String(r.NOMEFUNC ?? ""),
-            cargo: "Colaborador",
+            cargo: String(r.DESCRCARGO ?? "Colaborador"),
+            codSetor: Number(r.AD_CODUSU ?? 0),
             senior: "Pleno",
             atividadesERP: planejadasPorFunc[codfunc] || [],
           };
@@ -608,6 +635,20 @@ export default function AlocacaoPage() {
     );
   }, [atividades]);
 
+  const setorAlocarLabel = useMemo(() => {
+    if (setorAlocar === "Todos") return "";
+    const cod = Number(setorAlocar);
+    const found = setoresDisponiveis.find(([c]) => c === cod);
+    if (!found) return String(setorAlocar);
+    return `${found[0]} - ${found[1]}`;
+  }, [setorAlocar, setoresDisponiveis]);
+
+  // ✅ lista filtrada para usar SOMENTE no “Alocar para”
+  const colabsParaAlocar = useMemo(() => {
+    if (setorAlocar === "Todos") return colabs;
+    return colabs.filter((c) => String(c.codSetor) === String(setorAlocar));
+  }, [colabs, setorAlocar]);
+
   const atividadesFiltradas = useMemo(
     () =>
       atividades.filter((a) => {
@@ -619,13 +660,7 @@ export default function AlocacaoPage() {
 
         if (q.trim()) {
           const k = q.trim().toLowerCase();
-          if (
-            !(
-              `${a.nome} ${a.setor} ${a.codusu}`
-                .toLowerCase()
-                .includes(k)
-            )
-          )
+          if (!(`${a.nome} ${a.setor} ${a.codusu}`.toLowerCase().includes(k)))
             return false;
         }
         return true;
@@ -634,13 +669,11 @@ export default function AlocacaoPage() {
   );
 
   const totalHH = atividades.reduce((s, a) => s + a.hhPrev, 0);
-  // HH alocado: considera que, se tem pelo menos 1 colaborador, a atividade está alocada
   const totalHHAloc = atividades.reduce(
     (s, a) => s + (a.alocados.length ? a.hhPrev : 0),
     0
   );
 
-  // resumo por colaborador: divide HH pela quantidade de alocados
   const resumoColabTela = (id: number) => {
     let qtd = 0;
     let hh = 0;
@@ -674,15 +707,12 @@ export default function AlocacaoPage() {
     }
 
     setAtividades((arr) =>
-      arr.map((x) =>
-        updates[x.id] ? { ...x, alocados: [updates[x.id]] } : x
-      )
+      arr.map((x) => (updates[x.id] ? { ...x, alocados: [updates[x.id]] } : x))
     );
   };
 
   /* ===== Exportar planejamento por funcionário (CSV) ===== */
   const exportPlanejamentoCsv = () => {
-    // Tela (multi-colaborador: 1 linha por colaborador, HH dividida)
     const registrosTela = atividades.flatMap((a) => {
       if (!a.alocados.length) return [];
       const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
@@ -700,7 +730,6 @@ export default function AlocacaoPage() {
       });
     });
 
-    // ERP
     const registrosErp: {
       codfunc: number;
       nome: string;
@@ -733,15 +762,7 @@ export default function AlocacaoPage() {
       return;
     }
 
-    const header = [
-      "codfunc",
-      "nome",
-      "op",
-      "data",
-      "atividade",
-      "hh",
-      "origem",
-    ];
+    const header = ["codfunc", "nome", "op", "data", "atividade", "hh", "origem"];
 
     const rows = registros.map((r) => [
       r.codfunc,
@@ -799,9 +820,7 @@ export default function AlocacaoPage() {
     });
 
     if (!hasAny) {
-      alert(
-        "Nenhuma atividade (tela ou ERP) no período selecionado para exportar."
-      );
+      alert("Nenhuma atividade (tela ou ERP) no período selecionado para exportar.");
       return;
     }
 
@@ -814,14 +833,11 @@ export default function AlocacaoPage() {
     const pageWidth = doc.internal.pageSize.getWidth();
     let cursorY = 15;
 
-    // Cabeçalho
     try {
       if (LOGO_BASE64 && LOGO_BASE64 !== "data:image/png;base64,SEU_LOGO_AQUI") {
         doc.addImage(LOGO_BASE64, "PNG", 10, 8, 30, 10);
       }
-    } catch {
-      // ignora problema na logo
-    }
+    } catch {}
 
     doc.setFont("helvetica", "bold");
     doc.setFontSize(14);
@@ -844,18 +860,14 @@ export default function AlocacaoPage() {
 
     colabs.forEach((colab) => {
       const telaAtvs = atividades
-        .filter(
-          (a) => a.alocados.includes(colab.id) && a.dt >= ini && a.dt <= fin
-        )
+        .filter((a) => a.alocados.includes(colab.id) && a.dt >= ini && a.dt <= fin)
         .sort((a, b) => a.dt.localeCompare(b.dt));
 
       const erpAtvs = (colab.atividadesERP || [])
         .filter((p) => !p.dt || (p.dt >= ini && p.dt <= fin))
         .sort((a, b) => a.dt.localeCompare(b.dt));
 
-      if (!telaAtvs.length && !erpAtvs.length) {
-        return;
-      }
+      if (!telaAtvs.length && !erpAtvs.length) return;
 
       if (cursorY > 260) {
         doc.addPage();
@@ -872,15 +884,14 @@ export default function AlocacaoPage() {
         const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
         return s + share;
       }, 0);
+
       const hhErp = erpAtvs.reduce((s, p) => s + p.qtd / 60, 0);
       const hhTotal = hhTela + hhErp;
 
       doc.text(
-        `HH tela: ${hhTela.toFixed(
+        `HH tela: ${hhTela.toFixed(1)}h   •   HH ERP: ${hhErp.toFixed(
           1
-        )}h   •   HH ERP: ${hhErp.toFixed(1)}h   •   Total: ${hhTotal.toFixed(
-          1
-        )}h`,
+        )}h   •   Total: ${hhTotal.toFixed(1)}h`,
         pageWidth - 14,
         cursorY,
         { align: "right" }
@@ -891,50 +902,24 @@ export default function AlocacaoPage() {
       type BodyRow = [string, string, string, string, string, string, string];
       const body: BodyRow[] = [];
 
-      // Tela
       telaAtvs.forEach((a) => {
         const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-        body.push([
-          toBR(a.dt),
-          a.nome,
-          "Tela",
-          a.etapa,
-          `${share.toFixed(1)}h`,
-          opId ?? "",
-          "",
-        ]);
+        body.push([toBR(a.dt), a.nome, "Tela", a.etapa, `${share.toFixed(1)}h`, opId ?? "", ""]);
       });
 
-      // ERP
       const etapaErp = etapaFromCargo(colab.cargo);
       erpAtvs.forEach((p) => {
         const hh = p.qtd / 60;
-        body.push([
-          toBR(p.dt),
-          `${p.codprod} - ${p.descrprod}`,
-          "ERP",
-          etapaErp,
-          `${hh.toFixed(1)}h`,
-          opId ?? "",
-          "",
-        ]);
+        body.push([toBR(p.dt), `${p.codprod} - ${p.descrprod}`, "ERP", etapaErp, `${hh.toFixed(1)}h`, opId ?? "", ""]);
       });
 
       autoTable(doc, {
         startY: cursorY,
         head: [["Data", "Atividade", "Origem", "Etapa", "HH", "OP", "OK"]],
         body,
-        styles: {
-          fontSize: 8,
-          cellPadding: 1.5,
-        },
-        headStyles: {
-          fillColor: [25, 40, 66],
-          textColor: 255,
-        },
-        alternateRowStyles: {
-          fillColor: [245, 245, 245],
-        },
+        styles: { fontSize: 8, cellPadding: 1.5 },
+        headStyles: { fillColor: [25, 40, 66], textColor: 255 },
+        alternateRowStyles: { fillColor: [245, 245, 245] },
         margin: { left: 12, right: 12 },
         didDrawCell: (data: any) => {
           if (data.section === "body" && data.column.index === 6) {
@@ -953,31 +938,21 @@ export default function AlocacaoPage() {
         cursorY = 30;
       }
       doc.setFontSize(9);
-      doc.text(
-        "Assinatura do colaborador: ________________________________",
-        14,
-        cursorY
-      );
+      doc.text("Assinatura do colaborador: ________________________________", 14, cursorY);
       cursorY += 10;
     });
 
-    doc.save(
-      `planejamento_OP_${opId}_${new Date().toISOString().slice(0, 10)}.pdf`
-    );
+    doc.save(`planejamento_OP_${opId}_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   /* ===== Botão Salvar planejamento (ERP) ===== */
   const salvarPlanejamento = async () => {
-    // só atividades com pelo menos 1 colaborador
-    const registros = atividades.filter(
-      (a) => a.alocados.length && a.codprod && a.seq
-    );
+    const registros = atividades.filter((a) => a.alocados.length && a.codprod && a.seq);
 
     if (!registros.length) {
       alert("Nenhuma atividade alocada para salvar.");
       return;
     }
-
     if (!opId) {
       alert("OP não informada.");
       return;
@@ -991,29 +966,18 @@ export default function AlocacaoPage() {
         const minutosPorColab = Math.round((a.hhPrev * 60) / qtdColabs);
 
         for (const codfunc of a.alocados) {
-          try {
-            await api.post("/api/sankhya/dataset/save", {
-              entity: "AD_DETALCRONOGRAMAFUNC",
-              fields: ["SEQ", "CODFUNC", "CODUSU", "CODPROD", "DTPLANEJAMENTO", "QTD"],
-              values: {
-                "0": String(a.seq),
-                "1": String(codfunc),
-                "2": String(a.codusu),
-                "3": String(a.codprod),
-                "4": toSankhyaDate(a.dt),
-                "5": minutosPorColab,
-              },
-            });
-          } catch (err: any) {
-            console.error(
-              "[salvarPlanejamento] Erro em uma atividade:",
-              a,
-              err?.response?.data || err
-            );
-            throw new Error(
-              `Erro ao salvar atividade ${a.nome} para o colaborador ${codfunc}.`
-            );
-          }
+          await api.post("/api/sankhya/dataset/save", {
+            entity: "AD_DETALCRONOGRAMAFUNC",
+            fields: ["SEQ", "CODFUNC", "CODUSU", "CODPROD", "DTPLANEJAMENTO", "QTD"],
+            values: {
+              "0": String(a.seq),
+              "1": String(codfunc),
+              "2": String(a.codusu),
+              "3": String(a.codprod),
+              "4": toSankhyaDate(a.dt),
+              "5": minutosPorColab,
+            },
+          });
         }
       }
 
@@ -1021,11 +985,7 @@ export default function AlocacaoPage() {
       setReloadToken((x) => x + 1);
     } catch (e: any) {
       console.error("[salvarPlanejamento] Falha:", e);
-      alert(
-        `Erro ao salvar o planejamento.\n${
-          e?.message || "Veja o console para mais detalhes."
-        }`
-      );
+      alert(`Erro ao salvar o planejamento.\n${e?.message || "Veja o console."}`);
     } finally {
       setSaving(false);
     }
@@ -1074,8 +1034,6 @@ export default function AlocacaoPage() {
     try {
       setLoadingSeq(item.seq);
 
-      const sankhyaDate = toSankhyaDate(item.dt);
-
       await api.post("/api/sankhya/dataset/save", {
         entity: "AD_DETALCRONOGRAMAFUNC",
         fields: ["SEQ", "CODFUNC", "CODPROD", "DTPLANEJAMENTO", "QTD"],
@@ -1083,7 +1041,7 @@ export default function AlocacaoPage() {
           "0": String(item.seq),
           "1": String(novoDestino),
           "2": String(item.codprod),
-          "3": sankhyaDate,
+          "3": toSankhyaDate(item.dt),
           "4": String(item.qtd),
         },
         pk: {
@@ -1104,9 +1062,7 @@ export default function AlocacaoPage() {
       setReloadToken((x) => x + 1);
     } catch (e) {
       console.error("[handleTrocarFuncionarioErpItem] Erro:", e);
-      alert(
-        "Erro ao trocar o colaborador dessa atividade no ERP. Veja o console para mais detalhes."
-      );
+      alert("Erro ao trocar o colaborador dessa atividade no ERP.");
     } finally {
       setLoadingSeq(null);
     }
@@ -1120,18 +1076,13 @@ export default function AlocacaoPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-semibold">
-                Alocação de Recursos — OP {opId}
-              </h3>
+              <h3 className="text-lg font-semibold">Alocação de Recursos — OP {opId}</h3>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 {preNome && (
-                  <Badge variant="secondary">
-                    Colaborador focado: {preNome}
-                  </Badge>
+                  <Badge variant="secondary">Colaborador focado: {preNome}</Badge>
                 )}
                 <span>
-                  Atividades: {atividades.length} • HH total:{" "}
-                  {totalHH.toFixed(1)}h • HH alocado:{" "}
+                  Atividades: {atividades.length} • HH total: {totalHH.toFixed(1)}h • HH alocado:{" "}
                   {totalHHAloc.toFixed(1)}h
                 </span>
                 <span>• Colaboradores: {colabs.length}</span>
@@ -1179,19 +1130,15 @@ export default function AlocacaoPage() {
             </div>
           </div>
         </CardHeader>
+
         <CardContent className="grid grid-cols-12 gap-3">
           <div className="col-span-12 md:col-span-3">
-          <label className="text-xs text-muted-foreground">Atividade</label>
-            <Input
-              placeholder="Buscar atividade…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+            <label className="text-xs text-muted-foreground">Atividade</label>
+            <Input placeholder="Buscar atividade…" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
+
           <div className="col-span-6 md:col-span-3 lg:col-span-2">
-            <label className="text-xs text-muted-foreground">
-              Setor (CODUSU / NOMEUSU)
-            </label>
+            <label className="text-xs text-muted-foreground">Setor </label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
               value={filtroSetor}
@@ -1205,23 +1152,34 @@ export default function AlocacaoPage() {
               ))}
             </select>
           </div>
+
+          {/* ✅ NOVO: setor para alocar */}
+          <div className="col-span-6 md:col-span-3 lg:col-span-2">
+            <label className="text-xs text-muted-foreground">
+              Setor para alocar
+            </label>
+            <select
+              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
+              value={setorAlocar}
+              onChange={(e) => setSetorAlocar(e.target.value)}
+            >
+              <option value="Todos">Todos</option>
+              {setoresDisponiveis.map(([codusu, nome]) => (
+                <option key={codusu} value={String(codusu)}>
+                  {codusu} - {nome}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="col-span-6 md:col-span-2">
             <label className="text-xs text-muted-foreground">Início</label>
-            <Input
-              type="date"
-              value={ini}
-              onChange={(e) => setIni(e.target.value)}
-              className="text-xs"
-            />
+            <Input type="date" value={ini} onChange={(e) => setIni(e.target.value)} className="text-xs" />
           </div>
+
           <div className="col-span-6 md:col-span-2">
             <label className="text-xs text-muted-foreground">Fim</label>
-            <Input
-              type="date"
-              value={fin}
-              onChange={(e) => setFin(e.target.value)}
-              className="text-xs"
-            />
+            <Input type="date" value={fin} onChange={(e) => setFin(e.target.value)} className="text-xs" />
           </div>
         </CardContent>
       </Card>
@@ -1240,6 +1198,7 @@ export default function AlocacaoPage() {
             </Badge>
           </div>
         </CardHeader>
+
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <div className="min-w-[880px]">
@@ -1248,15 +1207,15 @@ export default function AlocacaoPage() {
                 <div className="col-span-2">Setor</div>
                 <div className="col-span-1 text-right">HH</div>
                 <div className="col-span-2">Data</div>
-                <div className="col-span-1">Alocado para</div>
+                <div className="col-span-1">Alocar para</div>
                 <div className="col-span-1 text-right">Ação</div>
               </div>
+
               <div className="max-h-[280px] overflow-y-auto divide-y">
                 {loading && (
-                  <div className="px-3 py-4 text-xs text-muted-foreground">
-                    Carregando dados…
-                  </div>
+                  <div className="px-3 py-4 text-xs text-muted-foreground">Carregando dados…</div>
                 )}
+
                 {!loading &&
                   atividadesFiltradas.map((a) => (
                     <div
@@ -1266,33 +1225,30 @@ export default function AlocacaoPage() {
                       <div className="col-span-5 truncate" title={a.nome}>
                         {a.nome}
                       </div>
+
                       <div className="col-span-2">
-                        <Badge
-                          className={cn(
-                            "text-[10px] px-1 py-0",
-                            etapaBadgeStyles[a.etapa]
-                          )}
-                        >
+                        <Badge className={cn("text-[10px] px-1 py-0", etapaBadgeStyles[a.etapa])}>
                           {a.codusu} - {a.setor}
                         </Badge>
                       </div>
-                      <div className="col-span-1 text-right">
-                        {a.hhPrev}h
-                      </div>
+
+                      <div className="col-span-1 text-right">{a.hhPrev}h</div>
                       <div className="col-span-2">{toBR(a.dt)}</div>
+
                       <div className="col-span-1">
+                        {/* ✅ AQUI aplica o filtro de setor nos funcionários */}
                         <ColabMultiSelect
                           atividade={a}
-                          colabs={colabs}
+                          colabs={colabsParaAlocar}
+                          setorAlocarLabel={setorAlocarLabel}
                           onChange={(alocados) =>
                             setAtividades((arr) =>
-                              arr.map((x) =>
-                                x.id === a.id ? { ...x, alocados } : x
-                              )
+                              arr.map((x) => (x.id === a.id ? { ...x, alocados } : x))
                             )
                           }
                         />
                       </div>
+
                       <div className="col-span-1 text-right">
                         {a.alocados.length > 0 && (
                           <Button
@@ -1301,9 +1257,7 @@ export default function AlocacaoPage() {
                             className="text-[10px] px-1.5 h-7"
                             onClick={() =>
                               setAtividades((arr) =>
-                                arr.map((x) =>
-                                  x.id === a.id ? { ...x, alocados: [] } : x
-                                )
+                                arr.map((x) => (x.id === a.id ? { ...x, alocados: [] } : x))
                               )
                             }
                           >
@@ -1313,6 +1267,7 @@ export default function AlocacaoPage() {
                       </div>
                     </div>
                   ))}
+
                 {!loading && atividadesFiltradas.length === 0 && (
                   <div className="px-3 py-4 text-xs text-muted-foreground">
                     Nenhuma atividade encontrada com os filtros atuais.
@@ -1329,6 +1284,7 @@ export default function AlocacaoPage() {
         <CardHeader className="py-3">
           <h4 className="text-sm font-semibold">Colaboradores (grade)</h4>
         </CardHeader>
+
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <div className="min-w-[720px]">
@@ -1339,14 +1295,13 @@ export default function AlocacaoPage() {
                 <div className="col-span-2 text-right">Atv ERP</div>
                 <div className="col-span-2 text-right">Qtd ERP</div>
               </div>
+
               <div className="max-h-[220px] overflow-y-auto divide-y">
                 {colabs.map((c) => {
                   const tela = resumoColabTela(c.id);
                   const qERP = c.atividadesERP.length;
-                  const qtdERP = c.atividadesERP.reduce(
-                    (s, p) => s + p.qtd,
-                    0
-                  );
+                  const qtdERP = c.atividadesERP.reduce((s, p) => s + p.qtd, 0);
+
                   return (
                     <div
                       key={c.id}
@@ -1356,22 +1311,23 @@ export default function AlocacaoPage() {
                         <Avatar className="h-6 w-6">
                           <AvatarFallback>{initials(c.nome)}</AvatarFallback>
                         </Avatar>
+
                         <div className="min-w-0">
                           <p className="font-medium truncate">{c.nome}</p>
                           <p className="text-[10px] text-muted-foreground truncate">
-                            {c.cargo}
+                            {c.cargo} • Setor: {c.codSetor || "-"}
                           </p>
                         </div>
                       </div>
+
                       <div className="col-span-2 text-right">{tela.qtd}</div>
-                      <div className="col-span-2 text-right">
-                        {tela.hh.toFixed(1)}h
-                      </div>
+                      <div className="col-span-2 text-right">{tela.hh.toFixed(1)}h</div>
                       <div className="col-span-2 text-right">{qERP}</div>
                       <div className="col-span-2 text-right">{qtdERP}</div>
                     </div>
                   );
                 })}
+
                 {!loading && !colabs.length && (
                   <div className="px-3 py-4 text-xs text-muted-foreground">
                     Nenhum colaborador retornado para o supervisor logado.
@@ -1387,19 +1343,16 @@ export default function AlocacaoPage() {
       <Card>
         <CardHeader className="py-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold">
-              Gantt de carga diária (07h — 17h)
-            </h4>
+            <h4 className="text-sm font-semibold">Gantt de carga diária (07h — 17h)</h4>
             <span className="text-[11px] text-muted-foreground">
-              Clique em uma barra para detalhar as atividades do colaborador e
-              trocar funcionário no ERP atividade por atividade.
+              Clique em uma barra para detalhar as atividades do colaborador e trocar funcionário no ERP.
             </span>
           </div>
         </CardHeader>
+
         <CardContent className="space-y-2">
           <div className="overflow-x-auto">
             <div className="min-w-[880px] space-y-1">
-              {/* cabeçalho horas */}
               <div
                 className="grid items-center text-[11px] text-muted-foreground"
                 style={{ gridTemplateColumns: "220px 1fr" }}
@@ -1419,15 +1372,11 @@ export default function AlocacaoPage() {
                 </div>
               </div>
 
-              {/* linhas de colaboradores */}
               <div className="max-h-[260px] overflow-y-auto space-y-1 pr-1">
                 {colabs.map((c) => {
                   const blocks = buildBlocksForColab(atividades, c);
                   const tela = resumoColabTela(c.id);
-                  const hhErp = (c.atividadesERP || []).reduce(
-                    (s, p) => s + p.qtd / 60,
-                    0
-                  );
+                  const hhErp = (c.atividadesERP || []).reduce((s, p) => s + p.qtd / 60, 0);
                   const hhTotal = tela.hh + hhErp;
 
                   return (
@@ -1440,14 +1389,14 @@ export default function AlocacaoPage() {
                         <Avatar className="h-6 w-6">
                           <AvatarFallback>{initials(c.nome)}</AvatarFallback>
                         </Avatar>
+
                         <div className="min-w-0">
-                          <p className="text-[11px] font-medium truncate">
-                            {c.nome}
-                          </p>
+                          <p className="text-[11px] font-medium truncate">{c.nome}</p>
                           <p className="text-[10px] text-muted-foreground truncate">
                             {hhTotal.toFixed(1)}h alocadas (tela + ERP)
                           </p>
                         </div>
+
                         <Button
                           variant="outline"
                           size="sm"
@@ -1460,7 +1409,6 @@ export default function AlocacaoPage() {
 
                       <div>
                         <div className="relative h-5 rounded-md bg-muted overflow-hidden">
-                          {/* grades de horas */}
                           <div
                             className="absolute inset-0 grid pointer-events-none"
                             style={{
@@ -1468,19 +1416,13 @@ export default function AlocacaoPage() {
                             }}
                           >
                             {hourTicks.map((h) => (
-                              <div
-                                key={h}
-                                className="border-l border-white/40 last:border-r"
-                              />
+                              <div key={h} className="border-l border-white/40 last:border-r" />
                             ))}
                           </div>
 
-                          {/* barras coloridas */}
                           {blocks.map((b) => {
-                            const left =
-                              ((b.start - HORA_INI) / TOTAL_HORAS) * 100;
-                            const width =
-                              ((b.end - b.start) / TOTAL_HORAS) * 100;
+                            const left = ((b.start - HORA_INI) / TOTAL_HORAS) * 100;
+                            const width = ((b.end - b.start) / TOTAL_HORAS) * 100;
 
                             return (
                               <div
@@ -1489,13 +1431,8 @@ export default function AlocacaoPage() {
                                   "absolute top-[2px] bottom-[2px] rounded-[3px] cursor-pointer hover:opacity-90 shadow-sm",
                                   etapaColor[b.etapa]
                                 )}
-                                style={{
-                                  left: `${left}%`,
-                                  width: `${width}%`,
-                                }}
-                                title={`${b.label} (${b.start.toFixed(
-                                  1
-                                )}h - ${b.end.toFixed(1)}h)`}
+                                style={{ left: `${left}%`, width: `${width}%` }}
+                                title={`${b.label} (${b.start.toFixed(1)}h - ${b.end.toFixed(1)}h)`}
                                 onClick={() => openHab(c)}
                               />
                             );
@@ -1505,6 +1442,7 @@ export default function AlocacaoPage() {
                     </div>
                   );
                 })}
+
                 {!loading && !colabs.length && (
                   <div className="text-[11px] text-muted-foreground px-1 py-2">
                     Sem colaboradores para exibir o Gantt.
@@ -1536,42 +1474,33 @@ export default function AlocacaoPage() {
                   {habColab?.nome} • {habColab?.cargo}
                 </Dialog.Title>
                 <Dialog.Description className="text-xs text-muted-foreground">
-                  Habilidades e atividades no período ({toBR(ini)} —{" "}
-                  {toBR(fin)})
+                  Habilidades e atividades no período ({toBR(ini)} — {toBR(fin)})
                 </Dialog.Description>
               </div>
+
               <Dialog.Close asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Fechar"
-                  onClick={closeHab}
-                >
+                <Button variant="ghost" size="icon" aria-label="Fechar" onClick={closeHab}>
                   <X className="h-4 w-4" />
                 </Button>
               </Dialog.Close>
             </div>
 
             <div className="mt-4 space-y-6">
-              {/* Habilidades */}
               <section>
                 <h4 className="text-sm font-medium mb-2">Habilidades</h4>
                 <div className="flex flex-wrap gap-2">
-                  {(habilidadesPorCargo[habColab?.cargo ?? "Colaborador"] || [
-                    "Operação geral",
-                  ]).map((h, i) => (
-                    <Badge key={i} variant="outline">
-                      {h}
-                    </Badge>
-                  ))}
+                  {(habilidadesPorCargo[habColab?.cargo ?? "Colaborador"] || ["Operação geral"]).map(
+                    (h, i) => (
+                      <Badge key={i} variant="outline">
+                        {h}
+                      </Badge>
+                    )
+                  )}
                 </div>
               </section>
 
-              {/* Atividades da tela */}
               <section>
-                <h4 className="text-sm font-medium mb-2">
-                  Atividades alocadas (tela)
-                </h4>
+                <h4 className="text-sm font-medium mb-2">Atividades alocadas (tela)</h4>
                 <div className="rounded-2xl border divide-y">
                   <div className="grid grid-cols-12 text-xs text-muted-foreground px-3 py-2">
                     <div className="col-span-6">Atividade</div>
@@ -1579,18 +1508,12 @@ export default function AlocacaoPage() {
                     <div className="col-span-2">Data</div>
                     <div className="col-span-2 text-right">HH</div>
                   </div>
+
                   {habColab
                     ? atividades
-                        .filter(
-                          (a) =>
-                            a.alocados.includes(habColab.id) &&
-                            a.dt >= ini &&
-                            a.dt <= fin
-                        )
+                        .filter((a) => a.alocados.includes(habColab.id) && a.dt >= ini && a.dt <= fin)
                         .map((a) => {
-                          const share = a.alocados.length
-                            ? a.hhPrev / a.alocados.length
-                            : a.hhPrev;
+                          const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
                           return (
                             <div
                               key={a.id}
@@ -1598,30 +1521,20 @@ export default function AlocacaoPage() {
                             >
                               <div className="col-span-6">{a.nome}</div>
                               <div className="col-span-2">
-                                <Badge
-                                  className={cn(
-                                    "text-[10px] px-1 py-0",
-                                    etapaBadgeStyles[a.etapa]
-                                  )}
-                                >
+                                <Badge className={cn("text-[10px] px-1 py-0", etapaBadgeStyles[a.etapa])}>
                                   {a.etapa}
                                 </Badge>
                               </div>
                               <div className="col-span-2">{toBR(a.dt)}</div>
-                              <div className="col-span-2 text-right">
-                                {share.toFixed(1)}h
-                              </div>
+                              <div className="col-span-2 text-right">{share.toFixed(1)}h</div>
                             </div>
                           );
                         })
                     : null}
+
                   {habColab &&
-                    atividades.filter(
-                      (a) =>
-                        a.alocados.includes(habColab.id) &&
-                        a.dt >= ini &&
-                        a.dt <= fin
-                    ).length === 0 && (
+                    atividades.filter((a) => a.alocados.includes(habColab.id) && a.dt >= ini && a.dt <= fin)
+                      .length === 0 && (
                       <div className="px-3 py-6 text-xs text-muted-foreground">
                         Nenhuma atividade alocada na tela neste período.
                       </div>
@@ -1629,11 +1542,8 @@ export default function AlocacaoPage() {
                 </div>
               </section>
 
-              {/* Planejamento ERP com troca */}
               <section>
-                <h4 className="text-sm font-medium mb-2">
-                  Planejamento ERP (AD_DETALCRONOGRAMAFUNC)
-                </h4>
+                <h4 className="text-sm font-medium mb-2">Planejamento ERP (AD_DETALCRONOGRAMAFUNC)</h4>
                 <div className="rounded-2xl border divide-y">
                   <div className="grid grid-cols-12 text-xs text-muted-foreground px-3 py-2">
                     <div className="col-span-4">Atividade</div>
@@ -1642,6 +1552,7 @@ export default function AlocacaoPage() {
                     <div className="col-span-3">Novo colaborador</div>
                     <div className="col-span-1 text-right">Ação</div>
                   </div>
+
                   {habColab && habColab.atividadesERP.length > 0 ? (
                     habColab.atividadesERP.map((p, i) => (
                       <div
@@ -1660,9 +1571,7 @@ export default function AlocacaoPage() {
                             onChange={(e) =>
                               setNovoDestinoPorSeq((prev) => ({
                                 ...prev,
-                                [p.seq]: e.target.value
-                                  ? Number(e.target.value)
-                                  : "",
+                                [p.seq]: e.target.value ? Number(e.target.value) : "",
                               }))
                             }
                           >

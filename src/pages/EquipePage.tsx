@@ -137,6 +137,7 @@ export default function EquipePage() {
 
         const sql = `
           SELECT 
+          
               FUN.CODFUNC, 
               FUN.NOMEFUNC,
               FUN.CODDEP, 
