@@ -20,16 +20,13 @@ import {
   FileText,
   ChevronsUpDown,
   Check,
+  ClipboardList,
 } from "lucide-react";
 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { cn } from "@/lib/utils";
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-} from "@/components/ui/popover";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 
 /* =================== Tipos =================== */
 type Etapa = "LAM" | "MON" | "PINT" | "ELE" | "ACB";
@@ -76,10 +73,9 @@ function rangeDays(ini: string, fin: string): string[] {
   const b = new Date(fin);
   for (let d = new Date(a); d <= b; d.setDate(d.getDate() + 1)) {
     res.push(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
-        2,
-        "0"
-      )}-${String(d.getDate()).padStart(2, "0")}`
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+        d.getDate()
+      ).padStart(2, "0")}`
     );
   }
   return res;
@@ -157,39 +153,20 @@ function etapaFromCargo(cargo: string): Etapa {
   return "MON"; // padrão
 }
 
-/**
- * Monta os blocos do Gantt considerando:
- * - atividades da TELA (Atividade, com hhPrev)
- * - atividades já planejadas no ERP (atividadesERP, com qtd em minutos)
- * Cada colaborador recebe hh divididas pela quantidade de alocados.
- */
-function buildBlocksForColab(
-  atividadesTela: Atividade[],
-  colab: Colab
-): GanttBlock[] {
-  const tarefas: {
-    atividadeId: number;
-    label: string;
-    etapa: Etapa;
-    hh: number;
-  }[] = [];
+function buildBlocksForColab(atividadesTela: Atividade[], colab: Colab): GanttBlock[] {
+  const tarefas: { atividadeId: number; label: string; etapa: Etapa; hh: number }[] = [];
 
-  // 1) Atividades alocadas na TELA (multi-colaborador)
+  // 1) Atividades alocadas na TELA
   atividadesTela
     .filter((a) => a.alocados.includes(colab.id))
     .forEach((a) => {
       const qtdColabs = a.alocados.length || 1;
       const hhShare = a.hhPrev / qtdColabs;
       const hh = Math.max(0.25, Math.round(hhShare * 10) / 10);
-      tarefas.push({
-        atividadeId: a.id,
-        label: a.nome,
-        etapa: a.etapa,
-        hh,
-      });
+      tarefas.push({ atividadeId: a.id, label: a.nome, etapa: a.etapa, hh });
     });
 
-  // 2) Atividades já planejadas no ERP (AD_DETALCRONOGRAMAFUNC)
+  // 2) Atividades já planejadas no ERP
   const etapaErp = etapaFromCargo(colab.cargo);
   (colab.atividadesERP || []).forEach((p, idx) => {
     const hh = Math.max(0.5, Math.round((p.qtd / 60) * 10) / 10);
@@ -211,14 +188,7 @@ function buildBlocksForColab(
     const start = cursor;
     const end = Math.min(HORA_FIM, start + dur);
 
-    blocks.push({
-      atividadeId: t.atividadeId,
-      label: t.label,
-      start,
-      end,
-      etapa: t.etapa,
-    });
-
+    blocks.push({ atividadeId: t.atividadeId, label: t.label, start, end, etapa: t.etapa });
     cursor = end;
   }
 
@@ -226,14 +196,14 @@ function buildBlocksForColab(
 }
 
 /* ====== Logo em base64 para o PDF (troque pela sua) ====== */
-const LOGO_BASE64 = "data:image/png;base64,SEU_LOGO_AQUI"; // troque pelo base64 da logo
+const LOGO_BASE64 = "data:image/png;base64,SEU_LOGO_AQUI";
 
 /* ====== Componente de seleção multi-colaborador ====== */
 type ColabMultiSelectProps = {
   atividade: Atividade;
   colabs: Colab[];
   onChange: (alocados: number[]) => void;
-  setorAlocarLabel?: string; // opcional: mostrar “filtrado por setor”
+  setorAlocarLabel?: string;
 };
 
 const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
@@ -248,9 +218,7 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
   const filtrados = useMemo(() => {
     const k = search.trim().toLowerCase();
     if (!k) return colabs;
-    return colabs.filter((c) =>
-      `${c.id} ${c.nome}`.toLowerCase().includes(k)
-    );
+    return colabs.filter((c) => `${c.id} ${c.nome}`.toLowerCase().includes(k));
   }, [colabs, search]);
 
   const selecionados = useMemo(
@@ -263,20 +231,14 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
 
   const toggleColab = (id: number) => {
     const jaTem = atividade.alocados.includes(id);
-    if (jaTem) {
-      onChange(atividade.alocados.filter((x) => x !== id));
-    } else {
-      onChange([...atividade.alocados, id]);
-    }
+    if (jaTem) onChange(atividade.alocados.filter((x) => x !== id));
+    else onChange([...atividade.alocados, id]);
   };
 
   const nSel = atividade.alocados.length;
   let label = "Sem alocação";
-  if (nSel === 1 && selecionados[0]) {
-    label = `${selecionados[0].id} - ${selecionados[0].nome}`;
-  } else if (nSel > 1) {
-    label = `${nSel} colaboradores selecionados`;
-  }
+  if (nSel === 1 && selecionados[0]) label = `${selecionados[0].id} - ${selecionados[0].nome}`;
+  else if (nSel > 1) label = `${nSel} colaboradores selecionados`;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -294,7 +256,6 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
       </PopoverTrigger>
 
       <PopoverContent className="w-80 p-2">
-        {/* indicador de filtro */}
         {setorAlocarLabel ? (
           <div className="mb-2 text-[11px] text-muted-foreground">
             Filtrado por:{" "}
@@ -302,7 +263,6 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
           </div>
         ) : null}
 
-        {/* Busca */}
         <div className="mb-2">
           <Input
             placeholder="Buscar colaborador..."
@@ -312,7 +272,6 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
           />
         </div>
 
-        {/* Lista de opções */}
         <div className="max-h-44 overflow-y-auto space-y-1">
           {filtrados.map((c) => {
             const selected = atividade.alocados.includes(c.id);
@@ -329,9 +288,7 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
                 <span
                   className={cn(
                     "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                    selected
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-background"
+                    selected ? "bg-primary text-primary-foreground" : "bg-background"
                   )}
                 >
                   {selected && <Check className="h-3 w-3" />}
@@ -350,12 +307,9 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
           )}
         </div>
 
-        {/* Selecionados */}
         {selecionados.length > 0 && (
           <div className="mt-2 border-t pt-2">
-            <div className="mb-1 text-[11px] font-medium">
-              Selecionados ({selecionados.length})
-            </div>
+            <div className="mb-1 text-[11px] font-medium">Selecionados ({selecionados.length})</div>
             <div className="flex flex-wrap gap-1">
               {selecionados.map((c) => (
                 <span
@@ -365,9 +319,7 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
                   {c.id} - {c.nome}
                   <button
                     type="button"
-                    onClick={() =>
-                      onChange(atividade.alocados.filter((x) => x !== c.id))
-                    }
+                    onClick={() => onChange(atividade.alocados.filter((x) => x !== c.id))}
                     className="inline-flex items-center justify-center rounded-full hover:bg-primary/20"
                   >
                     <X className="h-3 w-3" />
@@ -407,19 +359,17 @@ export default function AlocacaoPage() {
   const today = new Date();
   const defIni =
     sp.get("ini") ||
-    `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(
-      2,
-      "0"
-    )}-${String(today.getDate()).padStart(2, "0")}`;
+    `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
+      today.getDate()
+    ).padStart(2, "0")}`;
   const defFin =
     sp.get("fin") ||
     (() => {
       const t = new Date(today);
       t.setDate(t.getDate() + 5);
-      return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(
-        2,
-        "0"
-      )}-${String(t.getDate()).padStart(2, "0")}`;
+      return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(
+        t.getDate()
+      ).padStart(2, "0")}`;
     })();
 
   const [ini, setIni] = useState(defIni);
@@ -432,7 +382,7 @@ export default function AlocacaoPage() {
   const [q, setQ] = useState("");
   const [filtroSetor, setFiltroSetor] = useState<string>("Todos");
 
-  // ✅ novo filtro: setor para alocar (filtra funcionários no “Alocar para”)
+  // ✅ setor para alocar (AGORA também filtra grades e gantt)
   const [setorAlocar, setSetorAlocar] = useState<string>("Todos");
 
   const preNome = sp.get("colabNome");
@@ -441,13 +391,16 @@ export default function AlocacaoPage() {
   const [habColab, setHabColab] = useState<Colab | null>(null);
 
   // estado para troca de funcionário por atividade ERP (seq -> novo codfunc)
-  const [novoDestinoPorSeq, setNovoDestinoPorSeq] = useState<
-    Record<number, number | "">
-  >({});
+  const [novoDestinoPorSeq, setNovoDestinoPorSeq] = useState<Record<number, number | "">>({});
   const [loadingSeq, setLoadingSeq] = useState<number | null>(null);
 
   // para forçar reload após salvar/mudar coisa no ERP
   const [reloadToken, setReloadToken] = useState(0);
+
+  // ✅ Backlog (modal)
+  const [backlogOpen, setBacklogOpen] = useState(false);
+
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   /* ========= Carregar dados do ERP ========= */
   useEffect(() => {
@@ -469,7 +422,7 @@ export default function AlocacaoPage() {
           return;
         }
 
-        const CODUSU_SUP = (user as any)?.codusu ?? 673;
+        const CODUSU_SUP = (user as any)?.codusu ?? 134;
 
         // 1) Atividades da OP (sem aplicação)
         const sqlAtv = `
@@ -529,9 +482,7 @@ export default function AlocacaoPage() {
           };
         });
 
-        // 2) Colaboradores (agora traz CAR.AD_CODUSU para filtrar setor)
-        const CODUSU_SUP_QRY = CODUSU_SUP;
-
+        // 2) Colaboradores
         const sqlColabs = `
           SELECT DISTINCT
             FUN.CODFUNC,
@@ -541,7 +492,7 @@ export default function AlocacaoPage() {
           FROM TFPFUN FUN
           LEFT JOIN AD_DETALCRONOGRAMAFUNC F ON FUN.CODFUNC = F.CODFUNC
           JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
-          WHERE FUN.USUVPJSUP = ${CODUSU_SUP_QRY}
+          WHERE FUN.USUVPJSUP = ${CODUSU_SUP}
           ORDER BY FUN.NOMEFUNC
         `.trim();
 
@@ -563,7 +514,7 @@ export default function AlocacaoPage() {
           LEFT JOIN TGFPRO PRO ON PRO.CODPROD = F.CODPROD
           LEFT JOIN AD_CRONOGRAMA CRO ON CRO.SEQ = F.SEQ
           LEFT JOIN TPRIPROC PROC ON PROC.AD_CODPROJ = CRO.CODPROJ
-          WHERE FUN.USUVPJSUP = ${CODUSU_SUP_QRY}
+          WHERE FUN.USUVPJSUP = ${CODUSU_SUP}
             AND PROC.IDIPROC = ${idiproc}
             AND F.CODPROD IS NOT NULL
         `.trim();
@@ -625,14 +576,10 @@ export default function AlocacaoPage() {
     const map = new Map<number, string>();
     atividades.forEach((a) => {
       if (a.codusu) {
-        if (!map.has(a.codusu)) {
-          map.set(a.codusu, a.setor || String(a.codusu));
-        }
+        if (!map.has(a.codusu)) map.set(a.codusu, a.setor || String(a.codusu));
       }
     });
-    return Array.from(map.entries()).sort((a, b) =>
-      a[1].localeCompare(b[1], "pt-BR")
-    );
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
   }, [atividades]);
 
   const setorAlocarLabel = useMemo(() => {
@@ -643,36 +590,40 @@ export default function AlocacaoPage() {
     return `${found[0]} - ${found[1]}`;
   }, [setorAlocar, setoresDisponiveis]);
 
-  // ✅ lista filtrada para usar SOMENTE no “Alocar para”
-  const colabsParaAlocar = useMemo(() => {
+  // ✅ lista filtrada (agora é a base de TUDO que exibe colaborador)
+  const colabsVisiveis = useMemo(() => {
     if (setorAlocar === "Todos") return colabs;
     return colabs.filter((c) => String(c.codSetor) === String(setorAlocar));
   }, [colabs, setorAlocar]);
+
+  // ✅ lista filtrada para usar no “Alocar para”
+  const colabsParaAlocar = colabsVisiveis;
 
   const atividadesFiltradas = useMemo(
     () =>
       atividades.filter((a) => {
         if (a.dt < ini || a.dt > fin) return false;
 
-        if (filtroSetor !== "Todos" && String(a.codusu) !== filtroSetor) {
-          return false;
-        }
+        if (filtroSetor !== "Todos" && String(a.codusu) !== filtroSetor) return false;
 
         if (q.trim()) {
           const k = q.trim().toLowerCase();
-          if (!(`${a.nome} ${a.setor} ${a.codusu}`.toLowerCase().includes(k)))
-            return false;
+          if (!`${a.nome} ${a.setor} ${a.codusu}`.toLowerCase().includes(k)) return false;
         }
         return true;
       }),
     [atividades, ini, fin, filtroSetor, q]
   );
 
+  // ✅ Backlog = atividades atrasadas (dt < hoje) e ainda “não feitas”
+  const backlogAtividades = useMemo(() => {
+    return atividades
+      .filter((a) => a.dt && a.dt < todayStr) // atrasadas
+      .sort((a, b) => a.dt.localeCompare(b.dt));
+  }, [atividades, todayStr]);
+
   const totalHH = atividades.reduce((s, a) => s + a.hhPrev, 0);
-  const totalHHAloc = atividades.reduce(
-    (s, a) => s + (a.alocados.length ? a.hhPrev : 0),
-    0
-  );
+  const totalHHAloc = atividades.reduce((s, a) => s + (a.alocados.length ? a.hhPrev : 0), 0);
 
   const resumoColabTela = (id: number) => {
     let qtd = 0;
@@ -689,21 +640,20 @@ export default function AlocacaoPage() {
 
   /* =========== Distribuição auto simples (mock) =========== */
   const distribuirAuto = () => {
-    if (!colabs.length) return;
+    if (!colabsVisiveis.length) return;
+
     const semDono = atividades
       .filter((a) => !a.alocados.length && a.dt >= ini && a.dt <= fin)
-      .sort((a, b) =>
-        a.dt === b.dt ? b.hhPrev - a.hhPrev : a.dt.localeCompare(b.dt)
-      );
+      .sort((a, b) => (a.dt === b.dt ? b.hhPrev - a.hhPrev : a.dt.localeCompare(b.dt)));
     if (!semDono.length) return;
 
     const updates: Record<number, number> = {};
     let idxColab = 0;
 
     for (const a of semDono) {
-      const c = colabs[idxColab];
+      const c = colabsVisiveis[idxColab];
       updates[a.id] = c.id;
-      idxColab = (idxColab + 1) % colabs.length;
+      idxColab = (idxColab + 1) % colabsVisiveis.length;
     }
 
     setAtividades((arr) =>
@@ -740,7 +690,7 @@ export default function AlocacaoPage() {
       origem: "ERP";
     }[] = [];
 
-    colabs.forEach((c) => {
+    colabsVisiveis.forEach((c) => {
       (c.atividadesERP || []).forEach((p) => {
         const hh = (p.qtd || 0) / 60;
         registrosErp.push({
@@ -763,16 +713,7 @@ export default function AlocacaoPage() {
     }
 
     const header = ["codfunc", "nome", "op", "data", "atividade", "hh", "origem"];
-
-    const rows = registros.map((r) => [
-      r.codfunc,
-      r.nome,
-      r.op,
-      r.data,
-      r.atividade,
-      r.hh,
-      r.origem,
-    ]);
+    const rows = registros.map((r) => [r.codfunc, r.nome, r.op, r.data, r.atividade, r.hh, r.origem]);
 
     const csv =
       [header, ...rows]
@@ -780,9 +721,7 @@ export default function AlocacaoPage() {
           r
             .map((v) => {
               const s = String(v ?? "");
-              if (s.includes(";") || s.includes('"') || s.includes("\n")) {
-                return `"${s.replace(/"/g, '""')}"`;
-              }
+              if (s.includes(";") || s.includes('"') || s.includes("\n")) return `"${s.replace(/"/g, '""')}"`;
               return s;
             })
             .join(";")
@@ -793,72 +732,66 @@ export default function AlocacaoPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `planejamento_OP_${opId}_${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`;
+    a.download = `planejamento_OP_${opId}_${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  /* ===== Exportar PDF (Tela + ERP) ===== */
+  /* ===== Exportar PDF (✅ 1 página por colaborador) ===== */
   const exportPlanejamentoPdf = () => {
-    if (!colabs.length) {
+    const lista = colabsVisiveis.length ? colabsVisiveis : colabs;
+
+    if (!lista.length) {
       alert("Nenhum colaborador para exportar.");
       return;
     }
 
-    const hasAny = colabs.some((c) => {
-      const telaAtvs = atividades.filter(
-        (a) => a.alocados.includes(c.id) && a.dt >= ini && a.dt <= fin
-      );
-      const erpAtvs = (c.atividadesERP || []).filter(
-        (p) => !p.dt || (p.dt >= ini && p.dt <= fin)
-      );
-      return telaAtvs.length > 0 || erpAtvs.length > 0;
-    });
-
-    if (!hasAny) {
-      alert("Nenhuma atividade (tela ou ERP) no período selecionado para exportar.");
-      return;
-    }
-
-    const doc = new jsPDF({
-      orientation: "portrait",
-      unit: "mm",
-      format: "a4",
-    });
-
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
-    let cursorY = 15;
 
-    try {
-      if (LOGO_BASE64 && LOGO_BASE64 !== "data:image/png;base64,SEU_LOGO_AQUI") {
-        doc.addImage(LOGO_BASE64, "PNG", 10, 8, 30, 10);
-      }
-    } catch {}
+    const drawHeader = () => {
+      // Logo
+      try {
+        if (LOGO_BASE64 && LOGO_BASE64 !== "data:image/png;base64,SEU_LOGO_AQUI") {
+          doc.addImage(LOGO_BASE64, "PNG", 10, 8, 30, 10);
+        }
+      } catch {}
 
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(14);
-    doc.text("Planejamento de Atividades por Colaborador", pageWidth / 2, 15, {
-      align: "center",
-    });
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.text("Planejamento de Atividades por Colaborador", pageWidth / 2, 15, { align: "center" });
 
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    const hojeStr = toBR(new Date().toISOString().slice(0, 10));
-    doc.text(`OP: ${opId ?? ""}`, pageWidth / 2, 21, { align: "center" });
-    doc.text(
-      `Período: ${toBR(ini)} a ${toBR(fin)}  •  Gerado em: ${hojeStr}`,
-      pageWidth / 2,
-      26,
-      { align: "center" }
-    );
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      const hojeStr = toBR(new Date().toISOString().slice(0, 10));
+      doc.text(`OP: ${opId ?? ""}`, pageWidth / 2, 21, { align: "center" });
+      doc.text(`Período: ${toBR(ini)} a ${toBR(fin)}  •  Gerado em: ${hojeStr}`, pageWidth / 2, 26, {
+        align: "center",
+      });
 
-    cursorY = 32;
+      // linha separadora
+      doc.setDrawColor(220);
+      doc.line(12, 30, pageWidth - 12, 30);
+    };
 
-    colabs.forEach((colab) => {
+    lista.forEach((colab, idx) => {
+      // ✅ uma página por colaborador
+      if (idx > 0) doc.addPage();
+      drawHeader();
+
+      let cursorY = 38;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(12);
+      doc.text(`${colab.nome}`, 14, cursorY);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.text(`Cargo: ${colab.cargo}  •  Setor: ${colab.codSetor || "-"}`, 14, cursorY + 5);
+
+      // atividades
       const telaAtvs = atividades
         .filter((a) => a.alocados.includes(colab.id) && a.dt >= ini && a.dt <= fin)
         .sort((a, b) => a.dt.localeCompare(b.dt));
@@ -866,19 +799,6 @@ export default function AlocacaoPage() {
       const erpAtvs = (colab.atividadesERP || [])
         .filter((p) => !p.dt || (p.dt >= ini && p.dt <= fin))
         .sort((a, b) => a.dt.localeCompare(b.dt));
-
-      if (!telaAtvs.length && !erpAtvs.length) return;
-
-      if (cursorY > 260) {
-        doc.addPage();
-        cursorY = 15;
-      }
-
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "bold");
-      doc.text(colab.nome, 14, cursorY);
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "normal");
 
       const hhTela = telaAtvs.reduce((s, a) => {
         const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
@@ -888,58 +808,72 @@ export default function AlocacaoPage() {
       const hhErp = erpAtvs.reduce((s, p) => s + p.qtd / 60, 0);
       const hhTotal = hhTela + hhErp;
 
-      doc.text(
-        `HH tela: ${hhTela.toFixed(1)}h   •   HH ERP: ${hhErp.toFixed(
-          1
-        )}h   •   Total: ${hhTotal.toFixed(1)}h`,
-        pageWidth - 14,
-        cursorY,
-        { align: "right" }
-      );
+      doc.setFontSize(9);
+      doc.text(`HH tela: ${hhTela.toFixed(1)}h   •   HH ERP: ${hhErp.toFixed(1)}h   •   Total: ${hhTotal.toFixed(1)}h`, pageWidth - 14, cursorY, {
+        align: "right",
+      });
 
-      cursorY += 4;
+      cursorY += 10;
 
-      type BodyRow = [string, string, string, string, string, string, string];
+      type BodyRow = [string, string, string, string, string, string, string, string]; // + Obs
+
       const body: BodyRow[] = [];
 
       telaAtvs.forEach((a) => {
         const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-        body.push([toBR(a.dt), a.nome, "Tela", a.etapa, `${share.toFixed(1)}h`, opId ?? "", ""]);
+        body.push([toBR(a.dt), a.nome, "Tela", a.etapa, `${share.toFixed(1)}h`, opId ?? "", "", ""]);
       });
 
       const etapaErp = etapaFromCargo(colab.cargo);
       erpAtvs.forEach((p) => {
         const hh = p.qtd / 60;
-        body.push([toBR(p.dt), `${p.codprod} - ${p.descrprod}`, "ERP", etapaErp, `${hh.toFixed(1)}h`, opId ?? "", ""]);
+        body.push([toBR(p.dt), `${p.codprod} - ${p.descrprod}`, "ERP", etapaErp, `${hh.toFixed(1)}h`, opId ?? "", "", ""]);
       });
+
+      if (!body.length) {
+        body.push(["", "Sem atividades no período", "", "", "", opId ?? "", "", ""]);
+      }
 
       autoTable(doc, {
         startY: cursorY,
-        head: [["Data", "Atividade", "Origem", "Etapa", "HH", "OP", "OK"]],
+        head: [["Data", "Atividade", "Origem", "Etapa", "HH", "OP", "OK", "Obs"]],
         body,
-        styles: { fontSize: 8, cellPadding: 1.5 },
+        styles: { fontSize: 8, cellPadding: 1.4, textColor: 20 },
         headStyles: { fillColor: [25, 40, 66], textColor: 255 },
         alternateRowStyles: { fillColor: [245, 245, 245] },
         margin: { left: 12, right: 12 },
+        columnStyles: {
+          0: { cellWidth: 18 },
+          1: { cellWidth: 78 },
+          2: { cellWidth: 14 },
+          3: { cellWidth: 14 },
+          4: { cellWidth: 12, halign: "right" },
+          5: { cellWidth: 12 },
+          6: { cellWidth: 10, halign: "center" },
+          7: { cellWidth: 30 }, // Obs
+        },
         didDrawCell: (data: any) => {
+          // desenha quadradinho na coluna OK
           if (data.section === "body" && data.column.index === 6) {
             const { x, y, height } = data.cell;
             const size = Math.min(4, height - 2);
             const offsetY = y + (height - size) / 2;
-            doc.rect(x + 2, offsetY, size, size);
+            doc.setDrawColor(30);
+            doc.rect(x + 3, offsetY, size, size);
           }
         },
       });
 
-      cursorY = (doc as any).lastAutoTable.finalY + 8;
+      const finalY = (doc as any).lastAutoTable?.finalY ?? cursorY + 40;
+      const signY = Math.min(finalY + 14, 280);
 
-      if (cursorY > 250) {
-        doc.addPage();
-        cursorY = 30;
-      }
+      doc.setFontSize(10);
+      doc.text("Assinatura do colaborador:", 14, signY);
+      doc.line(60, signY, pageWidth - 14, signY);
+
       doc.setFontSize(9);
-      doc.text("Assinatura do colaborador: ________________________________", 14, cursorY);
-      cursorY += 10;
+      doc.text("Observações do dia:", 14, signY + 10);
+      doc.rect(14, signY + 12, pageWidth - 28, 22); // caixa grande para escrever
     });
 
     doc.save(`planejamento_OP_${opId}_${new Date().toISOString().slice(0, 10)}.pdf`);
@@ -1078,51 +1012,67 @@ export default function AlocacaoPage() {
             <div>
               <h3 className="text-lg font-semibold">Alocação de Recursos — OP {opId}</h3>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                {preNome && (
-                  <Badge variant="secondary">Colaborador focado: {preNome}</Badge>
-                )}
+                {preNome && <Badge variant="secondary">Colaborador focado: {preNome}</Badge>}
                 <span>
                   Atividades: {atividades.length} • HH total: {totalHH.toFixed(1)}h • HH alocado:{" "}
                   {totalHHAloc.toFixed(1)}h
                 </span>
-                <span>• Colaboradores: {colabs.length}</span>
+                <span>
+                  • Colaboradores (visíveis): {colabsVisiveis.length}
+                  {setorAlocar !== "Todos" ? ` • Setor: ${setorAlocarLabel}` : ""}
+                </span>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
+              {/* ✅ Backlog */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => setBacklogOpen(true)}
+                disabled={loading || !atividades.length}
+              >
+                <ClipboardList className="h-4 w-4" />
+                Backlog
+              </Button>
+
               <Button
                 variant="outline"
                 size="sm"
                 className="gap-1"
                 onClick={exportPlanejamentoCsv}
-                disabled={!atividades.length || !colabs.length}
+                disabled={!atividades.length || !(colabsVisiveis.length || colabs.length)}
               >
                 <Download className="h-4 w-4" />
                 CSV
               </Button>
+
               <Button
                 variant="outline"
                 size="sm"
                 className="gap-1"
                 onClick={exportPlanejamentoPdf}
-                disabled={!atividades.length || !colabs.length}
+                disabled={!atividades.length || !(colabsVisiveis.length || colabs.length)}
               >
                 <FileText className="h-4 w-4" />
                 PDF
               </Button>
+
               <Button
                 variant="outline"
                 size="sm"
                 onClick={distribuirAuto}
-                disabled={!atividades.length || !colabs.length}
+                disabled={!atividades.length || !colabsVisiveis.length}
               >
                 Distribuir (auto)
               </Button>
+
               <Button
                 size="sm"
                 className="gap-1"
                 onClick={salvarPlanejamento}
-                disabled={saving || !atividades.length || !colabs.length}
+                disabled={saving || !atividades.length || !colabsVisiveis.length}
               >
                 <Save className="h-4 w-4" />
                 {saving ? "Salvando..." : "Salvar"}
@@ -1138,7 +1088,7 @@ export default function AlocacaoPage() {
           </div>
 
           <div className="col-span-6 md:col-span-3 lg:col-span-2">
-            <label className="text-xs text-muted-foreground">Setor </label>
+            <label className="text-xs text-muted-foreground">Setor</label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
               value={filtroSetor}
@@ -1153,11 +1103,9 @@ export default function AlocacaoPage() {
             </select>
           </div>
 
-          {/* ✅ NOVO: setor para alocar */}
+          {/* ✅ Setor para alocar (agora também filtra Colaboradores + Gantt) */}
           <div className="col-span-6 md:col-span-3 lg:col-span-2">
-            <label className="text-xs text-muted-foreground">
-              Setor para alocar
-            </label>
+            <label className="text-xs text-muted-foreground">Setor para alocar</label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
               value={setorAlocar}
@@ -1236,7 +1184,6 @@ export default function AlocacaoPage() {
                       <div className="col-span-2">{toBR(a.dt)}</div>
 
                       <div className="col-span-1">
-                        {/* ✅ AQUI aplica o filtro de setor nos funcionários */}
                         <ColabMultiSelect
                           atividade={a}
                           colabs={colabsParaAlocar}
@@ -1279,10 +1226,17 @@ export default function AlocacaoPage() {
         </CardContent>
       </Card>
 
-      {/* Grade de colaboradores */}
+      {/* ✅ Grade de colaboradores (AGORA FILTRADA pelo “Setor para alocar”) */}
       <Card>
         <CardHeader className="py-3">
-          <h4 className="text-sm font-semibold">Colaboradores (grade)</h4>
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold">Colaboradores (grade)</h4>
+            {setorAlocar !== "Todos" ? (
+              <Badge variant="secondary" className="text-[11px]">
+                Filtrado: {setorAlocarLabel}
+              </Badge>
+            ) : null}
+          </div>
         </CardHeader>
 
         <CardContent className="p-0">
@@ -1297,16 +1251,13 @@ export default function AlocacaoPage() {
               </div>
 
               <div className="max-h-[220px] overflow-y-auto divide-y">
-                {colabs.map((c) => {
+                {colabsVisiveis.map((c) => {
                   const tela = resumoColabTela(c.id);
                   const qERP = c.atividadesERP.length;
                   const qtdERP = c.atividadesERP.reduce((s, p) => s + p.qtd, 0);
 
                   return (
-                    <div
-                      key={c.id}
-                      className="grid grid-cols-12 items-center px-3 py-1.5 gap-2 text-xs"
-                    >
+                    <div key={c.id} className="grid grid-cols-12 items-center px-3 py-1.5 gap-2 text-xs">
                       <div className="col-span-4 flex items-center gap-2 min-w-0">
                         <Avatar className="h-6 w-6">
                           <AvatarFallback>{initials(c.nome)}</AvatarFallback>
@@ -1328,9 +1279,9 @@ export default function AlocacaoPage() {
                   );
                 })}
 
-                {!loading && !colabs.length && (
+                {!loading && !colabsVisiveis.length && (
                   <div className="px-3 py-4 text-xs text-muted-foreground">
-                    Nenhum colaborador retornado para o supervisor logado.
+                    Nenhum colaborador para o filtro atual.
                   </div>
                 )}
               </div>
@@ -1339,13 +1290,13 @@ export default function AlocacaoPage() {
         </CardContent>
       </Card>
 
-      {/* Gantt por horas */}
+      {/* ✅ Gantt por horas (AGORA FILTRADO pelo “Setor para alocar”) */}
       <Card>
         <CardHeader className="py-3">
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-semibold">Gantt de carga diária (07h — 17h)</h4>
             <span className="text-[11px] text-muted-foreground">
-              Clique em uma barra para detalhar as atividades do colaborador e trocar funcionário no ERP.
+              Clique em “Detalhes” para trocar colaborador no ERP.
             </span>
           </div>
         </CardHeader>
@@ -1353,17 +1304,9 @@ export default function AlocacaoPage() {
         <CardContent className="space-y-2">
           <div className="overflow-x-auto">
             <div className="min-w-[880px] space-y-1">
-              <div
-                className="grid items-center text-[11px] text-muted-foreground"
-                style={{ gridTemplateColumns: "220px 1fr" }}
-              >
+              <div className="grid items-center text-[11px] text-muted-foreground" style={{ gridTemplateColumns: "220px 1fr" }}>
                 <div />
-                <div
-                  className="grid gap-[1px]"
-                  style={{
-                    gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))`,
-                  }}
-                >
+                <div className="grid gap-[1px]" style={{ gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))` }}>
                   {hourTicks.map((h) => (
                     <div key={h} className="text-center">
                       {h}h
@@ -1373,18 +1316,14 @@ export default function AlocacaoPage() {
               </div>
 
               <div className="max-h-[260px] overflow-y-auto space-y-1 pr-1">
-                {colabs.map((c) => {
+                {colabsVisiveis.map((c) => {
                   const blocks = buildBlocksForColab(atividades, c);
                   const tela = resumoColabTela(c.id);
                   const hhErp = (c.atividadesERP || []).reduce((s, p) => s + p.qtd / 60, 0);
                   const hhTotal = tela.hh + hhErp;
 
                   return (
-                    <div
-                      key={c.id}
-                      className="grid items-center gap-2"
-                      style={{ gridTemplateColumns: "220px 1fr" }}
-                    >
+                    <div key={c.id} className="grid items-center gap-2" style={{ gridTemplateColumns: "220px 1fr" }}>
                       <div className="flex items-center gap-2 pr-2">
                         <Avatar className="h-6 w-6">
                           <AvatarFallback>{initials(c.nome)}</AvatarFallback>
@@ -1411,9 +1350,7 @@ export default function AlocacaoPage() {
                         <div className="relative h-5 rounded-md bg-muted overflow-hidden">
                           <div
                             className="absolute inset-0 grid pointer-events-none"
-                            style={{
-                              gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))`,
-                            }}
+                            style={{ gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))` }}
                           >
                             {hourTicks.map((h) => (
                               <div key={h} className="border-l border-white/40 last:border-r" />
@@ -1443,9 +1380,9 @@ export default function AlocacaoPage() {
                   );
                 })}
 
-                {!loading && !colabs.length && (
+                {!loading && !colabsVisiveis.length && (
                   <div className="text-[11px] text-muted-foreground px-1 py-2">
-                    Sem colaboradores para exibir o Gantt.
+                    Sem colaboradores para exibir o Gantt (verifique o filtro “Setor para alocar”).
                   </div>
                 )}
               </div>
@@ -1453,6 +1390,94 @@ export default function AlocacaoPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* ✅ Modal Backlog (atividades atrasadas) */}
+      <Dialog.Root open={backlogOpen} onOpenChange={setBacklogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70" />
+          <Dialog.Content
+            className="
+              fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[980px]
+              -translate-x-1/2 -translate-y-1/2
+              rounded-2xl bg-white
+              border border-gray-200
+              p-4 shadow-2xl outline-none
+              max-h-[90vh] overflow-y-auto
+            "
+          >
+            <div className="flex items-start justify-between gap-4 border-b pb-3">
+              <div>
+                <Dialog.Title className="text-base font-semibold">Backlog — Atividades atrasadas</Dialog.Title>
+                <Dialog.Description className="text-xs text-muted-foreground">
+                  Atrasadas: DT &lt; {toBR(todayStr)} • Total: {backlogAtividades.length}
+                </Dialog.Description>
+              </div>
+
+              <Dialog.Close asChild>
+                <Button variant="ghost" size="icon" aria-label="Fechar">
+                  <X className="h-4 w-4" />
+                </Button>
+              </Dialog.Close>
+            </div>
+
+            <div className="mt-3 rounded-2xl border overflow-hidden">
+              <div className="grid grid-cols-12 text-[11px] text-muted-foreground px-3 py-2 border-b bg-muted/40">
+                <div className="col-span-5">Atividade</div>
+                <div className="col-span-2">Setor</div>
+                <div className="col-span-1 text-right">HH</div>
+                <div className="col-span-2">Data</div>
+                <div className="col-span-2">Alocar para</div>
+              </div>
+
+              <div className="max-h-[60vh] overflow-y-auto divide-y">
+                {backlogAtividades.map((a) => (
+                  <div key={`b-${a.id}`} className="grid grid-cols-12 items-center px-3 py-2 gap-2 text-xs">
+                    <div className="col-span-5 truncate" title={a.nome}>
+                      {a.nome}
+                    </div>
+
+                    <div className="col-span-2">
+                      <Badge className={cn("text-[10px] px-1 py-0", etapaBadgeStyles[a.etapa])}>
+                        {a.codusu} - {a.setor}
+                      </Badge>
+                    </div>
+
+                    <div className="col-span-1 text-right">{a.hhPrev}h</div>
+                    <div className="col-span-2">
+                      <span className="text-red-600 font-medium">{toBR(a.dt)}</span>
+                    </div>
+
+                    <div className="col-span-2">
+                      <ColabMultiSelect
+                        atividade={a}
+                        colabs={colabsParaAlocar}
+                        setorAlocarLabel={setorAlocarLabel}
+                        onChange={(alocados) =>
+                          setAtividades((arr) =>
+                            arr.map((x) => (x.id === a.id ? { ...x, alocados } : x))
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                {!loading && backlogAtividades.length === 0 && (
+                  <div className="px-3 py-6 text-xs text-muted-foreground">
+                    Nenhuma atividade atrasada encontrada.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <Dialog.Close asChild>
+                <Button variant="outline">Fechar</Button>
+              </Dialog.Close>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       {/* Modal Habilidades / Atividades / Planejamento ERP */}
       <Dialog.Root open={habOpen} onOpenChange={setHabOpen}>
@@ -1515,10 +1540,7 @@ export default function AlocacaoPage() {
                         .map((a) => {
                           const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
                           return (
-                            <div
-                              key={a.id}
-                              className="grid grid-cols-12 items-center px-3 py-2 gap-2 text-xs"
-                            >
+                            <div key={a.id} className="grid grid-cols-12 items-center px-3 py-2 gap-2 text-xs">
                               <div className="col-span-6">{a.nome}</div>
                               <div className="col-span-2">
                                 <Badge className={cn("text-[10px] px-1 py-0", etapaBadgeStyles[a.etapa])}>
@@ -1576,7 +1598,8 @@ export default function AlocacaoPage() {
                             }
                           >
                             <option value="">Selecione…</option>
-                            {colabs
+                            {/* ✅ respeita o filtro de setor também */}
+                            {colabsParaAlocar
                               .filter((c) => c.id !== habColab.id)
                               .map((c) => (
                                 <option key={c.id} value={c.id}>
