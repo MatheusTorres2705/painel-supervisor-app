@@ -36,7 +36,11 @@ type Atividade = {
   nome: string;
   etapa: Etapa;
   hhPrev: number; // horas totais da atividade
-  dt: string; // YYYY-MM-DD (data planejada)
+
+  // ✅ NOVO: separa data da DEMANDA x data do PLANEJAMENTO
+  dtDemanda: string; // YYYY-MM-DD (data prevista/demanda do cronograma)
+  dtPlan: string; // YYYY-MM-DD (data do planejamento — DTPLANEJAMENTO)
+
   alocados: number[]; // lista de CODFUNC alocados
 
   // Campos ERP para salvar em AD_DETALCRONOGRAMAFUNC
@@ -49,7 +53,7 @@ type Atividade = {
 
 type AtividadeERP = {
   seq: number;
-  dt: string;
+  dt: string; // DTPLANEJAMENTO
   codprod: number;
   descrprod: string;
   qtd: number; // minutos (QTD)
@@ -153,11 +157,17 @@ function etapaFromCargo(cargo: string): Etapa {
   return "MON"; // padrão
 }
 
-function buildBlocksForColab(atividadesTela: Atividade[], colab: Colab): GanttBlock[] {
+// ✅ Agora o Gantt é por DIA DE PLANEJAMENTO (dtPlan / DTPLANEJAMENTO)
+function buildBlocksForColab(
+  atividadesTela: Atividade[],
+  colab: Colab,
+  diaPlanejamento: string
+): GanttBlock[] {
   const tarefas: { atividadeId: number; label: string; etapa: Etapa; hh: number }[] = [];
 
-  // 1) Atividades alocadas na TELA
+  // 1) Atividades alocadas na TELA (somente do dia selecionado)
   atividadesTela
+    .filter((a) => a.dtPlan === diaPlanejamento)
     .filter((a) => a.alocados.includes(colab.id))
     .forEach((a) => {
       const qtdColabs = a.alocados.length || 1;
@@ -166,17 +176,19 @@ function buildBlocksForColab(atividadesTela: Atividade[], colab: Colab): GanttBl
       tarefas.push({ atividadeId: a.id, label: a.nome, etapa: a.etapa, hh });
     });
 
-  // 2) Atividades já planejadas no ERP
+  // 2) Atividades já planejadas no ERP (somente do dia selecionado)
   const etapaErp = etapaFromCargo(colab.cargo);
-  (colab.atividadesERP || []).forEach((p, idx) => {
-    const hh = Math.max(0.5, Math.round((p.qtd / 60) * 10) / 10);
-    tarefas.push({
-      atividadeId: 100000 + colab.id * 1000 + idx,
-      label: `${p.codprod} - ${p.descrprod} (ERP)`,
-      etapa: etapaErp,
-      hh,
+  (colab.atividadesERP || [])
+    .filter((p) => p.dt === diaPlanejamento)
+    .forEach((p, idx) => {
+      const hh = Math.max(0.5, Math.round((p.qtd / 60) * 10) / 10);
+      tarefas.push({
+        atividadeId: 100000 + colab.id * 1000 + idx,
+        label: `${p.codprod} - ${p.descrprod} (ERP)`,
+        etapa: etapaErp,
+        hh,
+      });
     });
-  });
 
   // 3) Distribuir sequencialmente das 07 às 17
   let cursor = HORA_INI;
@@ -355,7 +367,7 @@ export default function AlocacaoPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // período datas
+  // período datas (para ANALISAR DEMANDAS)
   const today = new Date();
   const defIni =
     sp.get("ini") ||
@@ -374,7 +386,11 @@ export default function AlocacaoPage() {
 
   const [ini, setIni] = useState(defIni);
   const [fin, setFin] = useState(defFin);
-  const dias = useMemo(() => rangeDays(ini, fin), [ini, fin]);
+  const dias = useMemo(() => rangeDays(ini, fin), [ini, fin]); // (se quiser usar em dropdown depois)
+
+  // ✅ NOVO: dia que você está “montando” o planejamento (controla Gantt + ajuda no preenchimento)
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [diaPlanejamento, setDiaPlanejamento] = useState<string>(sp.get("plan") || todayStr);
 
   const [colabs, setColabs] = useState<Colab[]>([]);
   const [atividades, setAtividades] = useState<Atividade[]>([]);
@@ -399,8 +415,6 @@ export default function AlocacaoPage() {
 
   // ✅ Backlog (modal)
   const [backlogOpen, setBacklogOpen] = useState(false);
-
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   /* ========= Carregar dados do ERP ========= */
   useEffect(() => {
@@ -462,7 +476,11 @@ export default function AlocacaoPage() {
 
           const tempoMin = Number(r.TEMPO_MIN ?? 0);
           const hhPrev = Math.round((tempoMin / 60) * 10) / 10;
-          const dt = String(r.DT || ini);
+
+          // ✅ Demanda = DTINICIOPREV; Planejamento inicia igual à demanda (você pode mudar na tela)
+          const dtDemanda = String(r.DT || ini);
+          const dtPlan = String(r.DT || ini);
+
           const codprod = Number(r.CODIGO ?? 0);
           const seq = Number(r.SEQCRONO ?? 0);
           const codusu = Number(r.CODSETOR ?? 0);
@@ -472,7 +490,8 @@ export default function AlocacaoPage() {
             nome: `${r.CODIGO ?? ""} - ${r.DESCRPROD ?? ""}`,
             etapa,
             hhPrev,
-            dt,
+            dtDemanda,
+            dtPlan,
             codprod,
             seq,
             tempoMin,
@@ -599,10 +618,11 @@ export default function AlocacaoPage() {
   // ✅ lista filtrada para usar no “Alocar para”
   const colabsParaAlocar = colabsVisiveis;
 
+  // ✅ Filtra por período de DEMANDA (para você “analisar as demandas”)
   const atividadesFiltradas = useMemo(
     () =>
       atividades.filter((a) => {
-        if (a.dt < ini || a.dt > fin) return false;
+        if (a.dtDemanda < ini || a.dtDemanda > fin) return false;
 
         if (filtroSetor !== "Todos" && String(a.codusu) !== filtroSetor) return false;
 
@@ -615,20 +635,36 @@ export default function AlocacaoPage() {
     [atividades, ini, fin, filtroSetor, q]
   );
 
-  // ✅ Backlog = atividades atrasadas (dt < hoje) e ainda “não feitas”
+  // ✅ Backlog = demandas atrasadas (dtDemanda < hoje) e ainda “não feitas”
   const backlogAtividades = useMemo(() => {
     return atividades
-      .filter((a) => a.dt && a.dt < todayStr) // atrasadas
-      .sort((a, b) => a.dt.localeCompare(b.dt));
+      .filter((a) => a.dtDemanda && a.dtDemanda < todayStr) // atrasadas
+      .sort((a, b) => a.dtDemanda.localeCompare(b.dtDemanda));
   }, [atividades, todayStr]);
 
   const totalHH = atividades.reduce((s, a) => s + a.hhPrev, 0);
   const totalHHAloc = atividades.reduce((s, a) => s + (a.alocados.length ? a.hhPrev : 0), 0);
 
+  // Resumo geral (no período, independente do dia do Gantt)
   const resumoColabTela = (id: number) => {
     let qtd = 0;
     let hh = 0;
     atividades.forEach((a) => {
+      if (a.alocados.includes(id)) {
+        qtd += 1;
+        const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
+        hh += share;
+      }
+    });
+    return { qtd, hh };
+  };
+
+  // ✅ Resumo por DIA DE PLANEJAMENTO (usado no Gantt)
+  const resumoColabTelaDia = (id: number, dia: string) => {
+    let qtd = 0;
+    let hh = 0;
+    atividades.forEach((a) => {
+      if (a.dtPlan !== dia) return;
       if (a.alocados.includes(id)) {
         qtd += 1;
         const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
@@ -643,8 +679,10 @@ export default function AlocacaoPage() {
     if (!colabsVisiveis.length) return;
 
     const semDono = atividades
-      .filter((a) => !a.alocados.length && a.dt >= ini && a.dt <= fin)
-      .sort((a, b) => (a.dt === b.dt ? b.hhPrev - a.hhPrev : a.dt.localeCompare(b.dt)));
+      .filter((a) => !a.alocados.length && a.dtDemanda >= ini && a.dtDemanda <= fin)
+      .sort((a, b) =>
+        a.dtDemanda === b.dtDemanda ? b.hhPrev - a.hhPrev : a.dtDemanda.localeCompare(b.dtDemanda)
+      );
     if (!semDono.length) return;
 
     const updates: Record<number, number> = {};
@@ -661,6 +699,17 @@ export default function AlocacaoPage() {
     );
   };
 
+  // ✅ Atalho: aplicar o “diaPlanejamento” como dtPlan em lote
+  const aplicarDiaPlanejamentoEmLote = () => {
+    setAtividades((arr) =>
+      arr.map((a) => {
+        // aplica apenas nas atividades visíveis (filtros) e que ainda não foram mexidas (opcional)
+        if (a.dtDemanda < ini || a.dtDemanda > fin) return a;
+        return { ...a, dtPlan: diaPlanejamento };
+      })
+    );
+  };
+
   /* ===== Exportar planejamento por funcionário (CSV) ===== */
   const exportPlanejamentoCsv = () => {
     const registrosTela = atividades.flatMap((a) => {
@@ -672,7 +721,7 @@ export default function AlocacaoPage() {
           codfunc,
           nome: col?.nome ?? "",
           op: opId ?? "",
-          data: toBR(a.dt),
+          data: toBR(a.dtPlan), // ✅ agora exporta a data do planejamento
           atividade: a.nome,
           hh: share.toFixed(1).replace(".", ","),
           origem: "Tela" as const,
@@ -721,7 +770,8 @@ export default function AlocacaoPage() {
           r
             .map((v) => {
               const s = String(v ?? "");
-              if (s.includes(";") || s.includes('"') || s.includes("\n")) return `"${s.replace(/"/g, '""')}"`;
+              if (s.includes(";") || s.includes('"') || s.includes("\n"))
+                return `"${s.replace(/"/g, '""')}"`;
               return s;
             })
             .join(";")
@@ -761,15 +811,20 @@ export default function AlocacaoPage() {
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(13);
-      doc.text("Planejamento de Atividades por Colaborador", pageWidth / 2, 15, { align: "center" });
+      doc.text("Planejamento de Atividades por Colaborador", pageWidth / 2, 15, {
+        align: "center",
+      });
 
       doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
       const hojeStr = toBR(new Date().toISOString().slice(0, 10));
       doc.text(`OP: ${opId ?? ""}`, pageWidth / 2, 21, { align: "center" });
-      doc.text(`Período: ${toBR(ini)} a ${toBR(fin)}  •  Gerado em: ${hojeStr}`, pageWidth / 2, 26, {
-        align: "center",
-      });
+      doc.text(
+        `Demandas: ${toBR(ini)} a ${toBR(fin)}  •  Gerado em: ${hojeStr}`,
+        pageWidth / 2,
+        26,
+        { align: "center" }
+      );
 
       // linha separadora
       doc.setDrawColor(220);
@@ -791,10 +846,10 @@ export default function AlocacaoPage() {
       doc.setFontSize(9);
       doc.text(`Cargo: ${colab.cargo}  •  Setor: ${colab.codSetor || "-"}`, 14, cursorY + 5);
 
-      // atividades
+      // ✅ atividades por DATA DE PLANEJAMENTO (dtPlan)
       const telaAtvs = atividades
-        .filter((a) => a.alocados.includes(colab.id) && a.dt >= ini && a.dt <= fin)
-        .sort((a, b) => a.dt.localeCompare(b.dt));
+        .filter((a) => a.alocados.includes(colab.id) && a.dtPlan >= ini && a.dtPlan <= fin)
+        .sort((a, b) => a.dtPlan.localeCompare(b.dtPlan));
 
       const erpAtvs = (colab.atividadesERP || [])
         .filter((p) => !p.dt || (p.dt >= ini && p.dt <= fin))
@@ -809,25 +864,47 @@ export default function AlocacaoPage() {
       const hhTotal = hhTela + hhErp;
 
       doc.setFontSize(9);
-      doc.text(`HH tela: ${hhTela.toFixed(1)}h   •   HH ERP: ${hhErp.toFixed(1)}h   •   Total: ${hhTotal.toFixed(1)}h`, pageWidth - 14, cursorY, {
-        align: "right",
-      });
+      doc.text(
+        `HH tela: ${hhTela.toFixed(1)}h   •   HH ERP: ${hhErp.toFixed(1)}h   •   Total: ${hhTotal.toFixed(1)}h`,
+        pageWidth - 14,
+        cursorY,
+        {
+          align: "right",
+        }
+      );
 
       cursorY += 10;
 
       type BodyRow = [string, string, string, string, string, string, string, string]; // + Obs
-
       const body: BodyRow[] = [];
 
       telaAtvs.forEach((a) => {
         const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-        body.push([toBR(a.dt), a.nome, "Tela", a.etapa, `${share.toFixed(1)}h`, opId ?? "", "", ""]);
+        body.push([
+          toBR(a.dtPlan),
+          a.nome,
+          "Tela",
+          a.etapa,
+          `${share.toFixed(1)}h`,
+          opId ?? "",
+          "",
+          "",
+        ]);
       });
 
       const etapaErp = etapaFromCargo(colab.cargo);
       erpAtvs.forEach((p) => {
         const hh = p.qtd / 60;
-        body.push([toBR(p.dt), `${p.codprod} - ${p.descrprod}`, "ERP", etapaErp, `${hh.toFixed(1)}h`, opId ?? "", "", ""]);
+        body.push([
+          toBR(p.dt),
+          `${p.codprod} - ${p.descrprod}`,
+          "ERP",
+          etapaErp,
+          `${hh.toFixed(1)}h`,
+          opId ?? "",
+          "",
+          "",
+        ]);
       });
 
       if (!body.length) {
@@ -899,6 +976,9 @@ export default function AlocacaoPage() {
         const qtdColabs = a.alocados.length || 1;
         const minutosPorColab = Math.round((a.hhPrev * 60) / qtdColabs);
 
+        // ✅ DTPLANEJAMENTO agora vem do dtPlan (se vazio, cai no diaPlanejamento)
+        const dtSalvar = a.dtPlan || diaPlanejamento;
+
         for (const codfunc of a.alocados) {
           await api.post("/api/sankhya/dataset/save", {
             entity: "AD_DETALCRONOGRAMAFUNC",
@@ -908,7 +988,7 @@ export default function AlocacaoPage() {
               "1": String(codfunc),
               "2": String(a.codusu),
               "3": String(a.codprod),
-              "4": toSankhyaDate(a.dt),
+              "4": toSankhyaDate(dtSalvar),
               "5": minutosPorColab,
             },
           });
@@ -1021,6 +1101,9 @@ export default function AlocacaoPage() {
                   • Colaboradores (visíveis): {colabsVisiveis.length}
                   {setorAlocar !== "Todos" ? ` • Setor: ${setorAlocarLabel}` : ""}
                 </span>
+                <span className="font-medium">
+                  • Dia do planejamento (Gantt): {toBR(diaPlanejamento)}
+                </span>
               </div>
             </div>
 
@@ -1081,13 +1164,18 @@ export default function AlocacaoPage() {
           </div>
         </CardHeader>
 
+        {/* ✅ filtros + NOVO campo de dia de planejamento */}
         <CardContent className="grid grid-cols-12 gap-3">
-          <div className="col-span-12 md:col-span-3">
+          <div className="col-span-12 md:col-span-2">
             <label className="text-xs text-muted-foreground">Atividade</label>
-            <Input placeholder="Buscar atividade…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <Input
+              placeholder="Buscar atividade…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
           </div>
 
-          <div className="col-span-6 md:col-span-3 lg:col-span-2">
+          <div className="col-span-6 md:col-span-2">
             <label className="text-xs text-muted-foreground">Setor</label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
@@ -1104,7 +1192,7 @@ export default function AlocacaoPage() {
           </div>
 
           {/* ✅ Setor para alocar (agora também filtra Colaboradores + Gantt) */}
-          <div className="col-span-6 md:col-span-3 lg:col-span-2">
+          <div className="col-span-6 md:col-span-2">
             <label className="text-xs text-muted-foreground">Setor para alocar</label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
@@ -1120,14 +1208,47 @@ export default function AlocacaoPage() {
             </select>
           </div>
 
+          {/* ✅ NOVO: Dia do planejamento (para montar vários dias) */}
           <div className="col-span-6 md:col-span-2">
-            <label className="text-xs text-muted-foreground">Início</label>
-            <Input type="date" value={ini} onChange={(e) => setIni(e.target.value)} className="text-xs" />
+            <label className="text-xs text-muted-foreground">Dia do planejamento (Gantt)</label>
+            <Input
+              type="date"
+              value={diaPlanejamento}
+              onChange={(e) => setDiaPlanejamento(e.target.value)}
+              className="text-xs"
+            />
+            <div className="mt-1 flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                onClick={aplicarDiaPlanejamentoEmLote}
+                disabled={!atividades.length}
+              >
+                Aplicar em lote (dtPlan)
+              </Button>
+            </div>
           </div>
 
           <div className="col-span-6 md:col-span-2">
-            <label className="text-xs text-muted-foreground">Fim</label>
-            <Input type="date" value={fin} onChange={(e) => setFin(e.target.value)} className="text-xs" />
+            <label className="text-xs text-muted-foreground">Início (demandas)</label>
+            <Input
+              type="date"
+              value={ini}
+              onChange={(e) => setIni(e.target.value)}
+              className="text-xs"
+            />
+          </div>
+
+          <div className="col-span-6 md:col-span-2">
+            <label className="text-xs text-muted-foreground">Fim (demandas)</label>
+            <Input
+              type="date"
+              value={fin}
+              onChange={(e) => setFin(e.target.value)}
+              className="text-xs"
+            />
           </div>
         </CardContent>
       </Card>
@@ -1139,7 +1260,7 @@ export default function AlocacaoPage() {
         <CardHeader className="py-3">
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-semibold">
-              Atividades da OP (grade) — {toBR(ini)} a {toBR(fin)}
+              Demandas da OP (grade) — {toBR(ini)} a {toBR(fin)}
             </h4>
             <Badge variant="outline" className="text-[11px]">
               {atividadesFiltradas.length}
@@ -1149,13 +1270,14 @@ export default function AlocacaoPage() {
 
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <div className="min-w-[880px]">
+            <div className="min-w-[980px]">
               <div className="grid grid-cols-12 text-[11px] text-muted-foreground px-3 py-1.5 border-b bg-muted/40">
-                <div className="col-span-5">Atividade</div>
+                <div className="col-span-4">Atividade</div>
                 <div className="col-span-2">Setor</div>
                 <div className="col-span-1 text-right">HH</div>
-                <div className="col-span-2">Data</div>
-                <div className="col-span-1">Alocar para</div>
+                <div className="col-span-2">Demanda</div>
+                <div className="col-span-1">Planej.</div>
+                <div className="col-span-1">Alocar</div>
                 <div className="col-span-1 text-right">Ação</div>
               </div>
 
@@ -1170,7 +1292,7 @@ export default function AlocacaoPage() {
                       key={a.id}
                       className="grid grid-cols-12 items-center px-3 py-1.5 gap-2 bg-card text-xs"
                     >
-                      <div className="col-span-5 truncate" title={a.nome}>
+                      <div className="col-span-4 truncate" title={a.nome}>
                         {a.nome}
                       </div>
 
@@ -1181,7 +1303,24 @@ export default function AlocacaoPage() {
                       </div>
 
                       <div className="col-span-1 text-right">{a.hhPrev}h</div>
-                      <div className="col-span-2">{toBR(a.dt)}</div>
+
+                      {/* Demanda */}
+                      <div className="col-span-2">{toBR(a.dtDemanda)}</div>
+
+                      {/* ✅ Planejamento editável (DTPLANEJAMENTO) */}
+                      <div className="col-span-1">
+                        <Input
+                          type="date"
+                          value={a.dtPlan}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setAtividades((arr) =>
+                              arr.map((x) => (x.id === a.id ? { ...x, dtPlan: v } : x))
+                            );
+                          }}
+                          className="h-7 px-1 text-[11px]"
+                        />
+                      </div>
 
                       <div className="col-span-1">
                         <ColabMultiSelect
@@ -1290,11 +1429,13 @@ export default function AlocacaoPage() {
         </CardContent>
       </Card>
 
-      {/* ✅ Gantt por horas (AGORA FILTRADO pelo “Setor para alocar”) */}
+      {/* ✅ Gantt por horas (AGORA POR DIA DE PLANEJAMENTO) */}
       <Card>
         <CardHeader className="py-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold">Gantt de carga diária (07h — 17h)</h4>
+            <h4 className="text-sm font-semibold">
+              Gantt — {toBR(diaPlanejamento)} (07h — 17h)
+            </h4>
             <span className="text-[11px] text-muted-foreground">
               Clique em “Detalhes” para trocar colaborador no ERP.
             </span>
@@ -1304,9 +1445,17 @@ export default function AlocacaoPage() {
         <CardContent className="space-y-2">
           <div className="overflow-x-auto">
             <div className="min-w-[880px] space-y-1">
-              <div className="grid items-center text-[11px] text-muted-foreground" style={{ gridTemplateColumns: "220px 1fr" }}>
+              <div
+                className="grid items-center text-[11px] text-muted-foreground"
+                style={{ gridTemplateColumns: "220px 1fr" }}
+              >
                 <div />
-                <div className="grid gap-[1px]" style={{ gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))` }}>
+                <div
+                  className="grid gap-[1px]"
+                  style={{
+                    gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))`,
+                  }}
+                >
                   {hourTicks.map((h) => (
                     <div key={h} className="text-center">
                       {h}h
@@ -1317,13 +1466,21 @@ export default function AlocacaoPage() {
 
               <div className="max-h-[260px] overflow-y-auto space-y-1 pr-1">
                 {colabsVisiveis.map((c) => {
-                  const blocks = buildBlocksForColab(atividades, c);
-                  const tela = resumoColabTela(c.id);
-                  const hhErp = (c.atividadesERP || []).reduce((s, p) => s + p.qtd / 60, 0);
-                  const hhTotal = tela.hh + hhErp;
+                  const blocks = buildBlocksForColab(atividades, c, diaPlanejamento);
+
+                  const telaDia = resumoColabTelaDia(c.id, diaPlanejamento);
+                  const hhErpDia = (c.atividadesERP || [])
+                    .filter((p) => p.dt === diaPlanejamento)
+                    .reduce((s, p) => s + p.qtd / 60, 0);
+
+                  const hhTotalDia = telaDia.hh + hhErpDia;
 
                   return (
-                    <div key={c.id} className="grid items-center gap-2" style={{ gridTemplateColumns: "220px 1fr" }}>
+                    <div
+                      key={c.id}
+                      className="grid items-center gap-2"
+                      style={{ gridTemplateColumns: "220px 1fr" }}
+                    >
                       <div className="flex items-center gap-2 pr-2">
                         <Avatar className="h-6 w-6">
                           <AvatarFallback>{initials(c.nome)}</AvatarFallback>
@@ -1332,7 +1489,7 @@ export default function AlocacaoPage() {
                         <div className="min-w-0">
                           <p className="text-[11px] font-medium truncate">{c.nome}</p>
                           <p className="text-[10px] text-muted-foreground truncate">
-                            {hhTotal.toFixed(1)}h alocadas (tela + ERP)
+                            {hhTotalDia.toFixed(1)}h no dia (tela + ERP)
                           </p>
                         </div>
 
@@ -1350,7 +1507,9 @@ export default function AlocacaoPage() {
                         <div className="relative h-5 rounded-md bg-muted overflow-hidden">
                           <div
                             className="absolute inset-0 grid pointer-events-none"
-                            style={{ gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))` }}
+                            style={{
+                              gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))`,
+                            }}
                           >
                             {hourTicks.map((h) => (
                               <div key={h} className="border-l border-white/40 last:border-r" />
@@ -1369,7 +1528,9 @@ export default function AlocacaoPage() {
                                   etapaColor[b.etapa]
                                 )}
                                 style={{ left: `${left}%`, width: `${width}%` }}
-                                title={`${b.label} (${b.start.toFixed(1)}h - ${b.end.toFixed(1)}h)`}
+                                title={`${b.label} (${b.start.toFixed(1)}h - ${b.end.toFixed(
+                                  1
+                                )}h)`}
                                 onClick={() => openHab(c)}
                               />
                             );
@@ -1391,7 +1552,7 @@ export default function AlocacaoPage() {
         </CardContent>
       </Card>
 
-      {/* ✅ Modal Backlog (atividades atrasadas) */}
+      {/* ✅ Modal Backlog (demandas atrasadas) */}
       <Dialog.Root open={backlogOpen} onOpenChange={setBacklogOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70" />
@@ -1407,9 +1568,11 @@ export default function AlocacaoPage() {
           >
             <div className="flex items-start justify-between gap-4 border-b pb-3">
               <div>
-                <Dialog.Title className="text-base font-semibold">Backlog — Atividades atrasadas</Dialog.Title>
+                <Dialog.Title className="text-base font-semibold">
+                  Backlog — Demandas atrasadas
+                </Dialog.Title>
                 <Dialog.Description className="text-xs text-muted-foreground">
-                  Atrasadas: DT &lt; {toBR(todayStr)} • Total: {backlogAtividades.length}
+                  Atrasadas: DT demanda &lt; {toBR(todayStr)} • Total: {backlogAtividades.length}
                 </Dialog.Description>
               </div>
 
@@ -1425,8 +1588,8 @@ export default function AlocacaoPage() {
                 <div className="col-span-5">Atividade</div>
                 <div className="col-span-2">Setor</div>
                 <div className="col-span-1 text-right">HH</div>
-                <div className="col-span-2">Data</div>
-                <div className="col-span-2">Alocar para</div>
+                <div className="col-span-2">Demanda</div>
+                <div className="col-span-2">Planejamento</div>
               </div>
 
               <div className="max-h-[60vh] overflow-y-auto divide-y">
@@ -1443,21 +1606,38 @@ export default function AlocacaoPage() {
                     </div>
 
                     <div className="col-span-1 text-right">{a.hhPrev}h</div>
-                    <div className="col-span-2">
-                      <span className="text-red-600 font-medium">{toBR(a.dt)}</span>
-                    </div>
 
                     <div className="col-span-2">
-                      <ColabMultiSelect
-                        atividade={a}
-                        colabs={colabsParaAlocar}
-                        setorAlocarLabel={setorAlocarLabel}
-                        onChange={(alocados) =>
+                      <span className="text-red-600 font-medium">{toBR(a.dtDemanda)}</span>
+                    </div>
+
+                    <div className="col-span-2 flex gap-2">
+                      <Input
+                        type="date"
+                        value={a.dtPlan}
+                        onChange={(e) => {
+                          const v = e.target.value;
                           setAtividades((arr) =>
-                            arr.map((x) => (x.id === a.id ? { ...x, alocados } : x))
+                            arr.map((x) => (x.id === a.id ? { ...x, dtPlan: v } : x))
+                          );
+                        }}
+                        className="h-7 px-1 text-[11px]"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-[11px]"
+                        onClick={() =>
+                          setAtividades((arr) =>
+                            arr.map((x) =>
+                              x.id === a.id ? { ...x, dtPlan: diaPlanejamento } : x
+                            )
                           )
                         }
-                      />
+                      >
+                        = Dia
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -1499,7 +1679,7 @@ export default function AlocacaoPage() {
                   {habColab?.nome} • {habColab?.cargo}
                 </Dialog.Title>
                 <Dialog.Description className="text-xs text-muted-foreground">
-                  Habilidades e atividades no período ({toBR(ini)} — {toBR(fin)})
+                  Habilidades e atividades no período (demandas {toBR(ini)} — {toBR(fin)})
                 </Dialog.Description>
               </div>
 
@@ -1530,13 +1710,13 @@ export default function AlocacaoPage() {
                   <div className="grid grid-cols-12 text-xs text-muted-foreground px-3 py-2">
                     <div className="col-span-6">Atividade</div>
                     <div className="col-span-2">Etapa</div>
-                    <div className="col-span-2">Data</div>
+                    <div className="col-span-2">Planej.</div>
                     <div className="col-span-2 text-right">HH</div>
                   </div>
 
                   {habColab
                     ? atividades
-                        .filter((a) => a.alocados.includes(habColab.id) && a.dt >= ini && a.dt <= fin)
+                        .filter((a) => a.alocados.includes(habColab.id) && a.dtPlan >= ini && a.dtPlan <= fin)
                         .map((a) => {
                           const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
                           return (
@@ -1547,7 +1727,7 @@ export default function AlocacaoPage() {
                                   {a.etapa}
                                 </Badge>
                               </div>
-                              <div className="col-span-2">{toBR(a.dt)}</div>
+                              <div className="col-span-2">{toBR(a.dtPlan)}</div>
                               <div className="col-span-2 text-right">{share.toFixed(1)}h</div>
                             </div>
                           );
@@ -1555,7 +1735,7 @@ export default function AlocacaoPage() {
                     : null}
 
                   {habColab &&
-                    atividades.filter((a) => a.alocados.includes(habColab.id) && a.dt >= ini && a.dt <= fin)
+                    atividades.filter((a) => a.alocados.includes(habColab.id) && a.dtPlan >= ini && a.dtPlan <= fin)
                       .length === 0 && (
                       <div className="px-3 py-6 text-xs text-muted-foreground">
                         Nenhuma atividade alocada na tela neste período.
@@ -1565,7 +1745,9 @@ export default function AlocacaoPage() {
               </section>
 
               <section>
-                <h4 className="text-sm font-medium mb-2">Planejamento ERP (AD_DETALCRONOGRAMAFUNC)</h4>
+                <h4 className="text-sm font-medium mb-2">
+                  Planejamento ERP (AD_DETALCRONOGRAMAFUNC)
+                </h4>
                 <div className="rounded-2xl border divide-y">
                   <div className="grid grid-cols-12 text-xs text-muted-foreground px-3 py-2">
                     <div className="col-span-4">Atividade</div>
