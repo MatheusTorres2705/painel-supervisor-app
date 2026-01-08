@@ -278,8 +278,8 @@ export default function DashboardPage() {
   const CODDEP_ALVO = 101040600;
 
   // (fixo conforme sua consulta de faltantes)
-  const ANO_FALTA = "2025";
-  const MES_FALTA = "12";
+  const ANO_FALTA = "2026";
+  const MES_FALTA = "1";
 
   const CODUSU_LOGADO = (user as any)?.codusu ?? 134;
 
@@ -406,7 +406,7 @@ export default function DashboardPage() {
         FROM AD_DETALCRONOGRAMAFUNC APO
         JOIN TFPFUN FUN ON FUN.CODFUNC = APO.CODFUNC
         JOIN TGFPRO PRO ON PRO.CODPROD = APO.CODPRODSP
-        WHERE FUN.CODFUNC = ${Number(codfunc)}
+        --WHERE FUN.CODFUNC = ${Number(codfunc)}
         ORDER BY APO.DTEXECUCAO DESC
       `.trim();
 
@@ -766,7 +766,7 @@ export default function DashboardPage() {
             JOIN TFPDEP DEP ON DEP.CODDEP = FUN.CODDEP
             WHERE FUN.USUVPJSUP = ${Number(CODUSU_SUP)}
               AND FUN.SITUACAO = '1'
-              AND FUN.CODDEP = ${Number(CODDEP_ALVO)}
+             -- AND FUN.CODDEP = ${Number(CODDEP_ALVO)}
             GROUP BY CAR.AD_NIVEL, DEP.AD_NIVELI, DEP.AD_NIVELII, DEP.AD_NIVELIII
           )
           GROUP BY NIVEL
@@ -947,7 +947,7 @@ export default function DashboardPage() {
         {/* Assiduidade (mock) */}
         <Card className="hover:shadow-lg transition">
           <CardHeader className="pb-2">
-            <CardTitle>Assiduidade (mock)</CardTitle>
+            <CardTitle>Assiduidade </CardTitle>
           </CardHeader>
           <CardContent className="h-80">
             <SpeedometerGauge value={assValue} max={100} title="Índice de assiduidade" />

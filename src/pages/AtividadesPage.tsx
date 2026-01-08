@@ -158,8 +158,8 @@ export default function AtividadesPage() {
              AND CAB.TIPMOV = 'P'
             LEFT JOIN TGFPAR PAR
               ON PAR.CODPARC = CAB.CODPARC
-            WHERE CRO.ANO IN ('2025' , '2026')
-              AND CRO.MES IN ( '11' , '12' , '01' , '02' , '03' , '04' , '05' , '06' )
+            WHERE CRO.ANO IN (  '2026')
+              AND CRO.MES IN ( '11' , '12' , '1' , '2' , '03' , '04' , '05' , '06' )
               AND PAI.AD_CODGRUPOPROD IN (020900,021100)
           ) T
           GROUP BY

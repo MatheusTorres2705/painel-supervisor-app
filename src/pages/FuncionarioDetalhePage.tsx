@@ -802,6 +802,7 @@ export default function FuncionarioDetalhePage() {
     { key: "funcoes", label: "Funções / Papéis", icon: BriefcaseBusiness },
     { key: "pdi", label: "PDI", icon: Target },
     { key: "checkin", label: "Avaliação Comportamental", icon: CheckSquare },
+     { key: "pdi", label: "Extrato do Ponto", icon: CheckSquare },
     { key: "anotacoes", label: "Anotações", icon: MessageCircle },
   ] as const;
 

@@ -17,6 +17,7 @@ import MateriaisPage from "./pages/MateriaisPage";
 import CalendarioPage from "./pages/CalendarioPage";
 import PlanoAcaoPage from "./pages/PlanoAcaoPage";
 import FuncionarioDetalhePage from "@/pages/FuncionarioDetalhePage";
+import HoraExtraPage from "./pages/HoraExtraPage";
 
 
 export default function App() {
@@ -94,6 +95,17 @@ export default function App() {
               <ProtectedRoute>
                 <Layout>
                   <PlanoAcaoPage />
+                  
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+           <Route
+            path="/hora-extra"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <HoraExtraPage />
                   
                 </Layout>
               </ProtectedRoute>

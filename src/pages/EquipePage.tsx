@@ -36,7 +36,17 @@ import {
 } from "@/components/ui/command";
 
 type SeniorFilter = "Todos" | "Júnior" | "Pleno" | "Sênior";
-type SortKey = "rank" | "nome" | "cargo" | "depto" | "tempo" | "atingimento";
+type ComportFilter = "Todos" | "Com nota" | "Sem nota";
+
+// ✅ adicionamos "comportam" para ordenar por ATING_COMPORTAM
+type SortKey =
+  | "rank"
+  | "nome"
+  | "cargo"
+  | "depto"
+  | "tempo"
+  | "atingimento"
+  | "comportam";
 
 export type MembroEquipe = {
   id: number; // CODFUNC
@@ -52,9 +62,12 @@ export type MembroEquipe = {
   hhProd: number;
   hhFalta: number;
 
-  // ✅ novo
+  // ✅ geral
   atingimento: number; // 0..100
   rank: number; // recalculado
+
+  // ✅ novo: percentual médio da avaliação comportamental (ou null se não tem)
+  atingComportam: number | null; // 0..100 | null
 };
 
 type SkillNivel = "Básico" | "Intermediário" | "Avançado";
@@ -71,6 +84,12 @@ type SkillCatalogo = {
   descrprod: string;
 };
 
+function clampPct(v: any) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
 function mapNivelToLabel(n: string | null | undefined): "Júnior" | "Pleno" | "Sênior" {
   const v = (n || "").toUpperCase();
   if (v.startsWith("S")) return "Sênior";
@@ -85,10 +104,30 @@ function disponibilidadeColor(hhFalta: number) {
 }
 
 function atingimentoTone(p: number) {
-  if (p >= 100) return { cls: "bg-emerald-50 text-emerald-800 border-emerald-200", label: "Meta atingida" };
-  if (p >= 80) return { cls: "bg-sky-50 text-sky-800 border-sky-200", label: "Dentro do esperado" };
-  if (p > 0) return { cls: "bg-amber-50 text-amber-800 border-amber-200", label: "Abaixo do esperado" };
+  if (p >= 100)
+    return {
+      cls: "bg-emerald-50 text-emerald-800 border-emerald-200",
+      label: "Meta atingida",
+    };
+  if (p >= 80)
+    return {
+      cls: "bg-sky-50 text-sky-800 border-sky-200",
+      label: "Dentro do esperado",
+    };
+  if (p > 0)
+    return {
+      cls: "bg-amber-50 text-amber-800 border-amber-200",
+      label: "Abaixo do esperado",
+    };
   return { cls: "bg-muted text-muted-foreground border-border", label: "Sem dados" };
+}
+
+// ✅ tom específico para "comportamental": se null = sem nota
+function comportTone(v: number | null) {
+  if (v === null) {
+    return { cls: "bg-muted text-muted-foreground border-border", label: "Sem nota" };
+  }
+  return atingimentoTone(v);
 }
 
 const fotoUrl = (codfunc: number) =>
@@ -105,6 +144,10 @@ export default function EquipePage() {
   // ----------------- Filtros/Ordenação -----------------
   const [q, setQ] = useState("");
   const [senior, setSenior] = useState<SeniorFilter>("Todos");
+
+  // ✅ filtro de nota comportamental
+  const [comport, setComport] = useState<ComportFilter>("Todos");
+
   const [sortKey, setSortKey] = useState<SortKey>("atingimento");
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -124,7 +167,7 @@ export default function EquipePage() {
   const [habilidadeOpen, setHabilidadeOpen] = useState(false);
 
   // =========================
-  // ✅ Carregar atingimento por colaborador (1 query p/ todos)
+  // ✅ Carregar atingimento geral por colaborador (1 query p/ todos)
   // =========================
   const carregarAtingimentoEquipe = async (codfuncs: number[]) => {
     if (!codfuncs.length) return;
@@ -171,8 +214,7 @@ export default function EquipePage() {
     const map: Record<number, number> = {};
     for (const r of rows) {
       const id = Number(r.CODFUNC);
-      const v = Math.max(0, Math.min(100, Number(r.ATING_GERAL ?? 0)));
-      map[id] = Math.round(v);
+      map[id] = clampPct(r.ATING_GERAL);
     }
 
     setBase((prev) => {
@@ -207,41 +249,58 @@ export default function EquipePage() {
 
         const sql = `
           SELECT 
-              FUN.CODFUNC, 
-              FUN.NOMEFUNC,
-              FUN.CODDEP, 
-              DEP.DESCRDEP,
-              CAR.DESCRCARGO,
-              NVL(CAR.AD_NIVEL, 'I') AS SENHORIDADE, 
-              TRUNC(MONTHS_BETWEEN(SYSDATE, FUN.DTADM) / 12) AS ANOS,
-              TRUNC(MOD(MONTHS_BETWEEN(SYSDATE, FUN.DTADM), 12)) AS MESES,
-              TO_CHAR(FLOOR(MONTHS_BETWEEN(SYSDATE, FUN.DTADM)/12)) || ' ano(s) e ' ||
-              TO_CHAR(FLOOR(MOD(MONTHS_BETWEEN(SYSDATE, FUN.DTADM),12))) || ' mes(es)' AS TEMPO_CASA
+            AVG((A.PONTUACAO / 5) * 100) AS ATING_COMPORTAM,
+            FUN.CODFUNC, 
+            FUN.NOMEFUNC,
+            FUN.CODDEP, 
+            DEP.DESCRDEP,
+            CAR.DESCRCARGO,
+            NVL(CAR.AD_NIVEL, 'I') AS SENHORIDADE, 
+            TRUNC(MONTHS_BETWEEN(SYSDATE, FUN.DTADM) / 12) AS ANOS,
+            TRUNC(MOD(MONTHS_BETWEEN(SYSDATE, FUN.DTADM), 12)) AS MESES,
+            TO_CHAR(FLOOR(MONTHS_BETWEEN(SYSDATE, FUN.DTADM) / 12)) || ' ano(s) e ' ||
+            TO_CHAR(FLOOR(MOD(MONTHS_BETWEEN(SYSDATE, FUN.DTADM), 12))) || ' mes(es)' AS TEMPO_CASA
           FROM TFPFUN FUN
           JOIN TFPDEP DEP ON DEP.CODDEP = FUN.CODDEP
           JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
+          LEFT JOIN AD_TFPFUNAC A ON A.CODFUNC = FUN.CODFUNC
           WHERE FUN.USUVPJSUP = ${CODUSU_SUP}
             AND FUN.SITUACAO <> '0'
+          GROUP BY
+            FUN.CODFUNC,
+            FUN.NOMEFUNC,
+            FUN.CODDEP,
+            DEP.DESCRDEP,
+            CAR.DESCRCARGO,
+            NVL(CAR.AD_NIVEL, 'I'),
+            FUN.DTADM
         `.trim();
 
         const rows = await obterReg(sql);
         if (cancel) return;
 
-        const mapped: MembroEquipe[] = rows.map((r: any) => ({
-          id: Number(r.CODFUNC),
-          codfunc: Number(r.CODFUNC),
-          nome: String(r.NOMEFUNC ?? ""),
-          cargo: String(r.DESCRCARGO ?? ""),
-          depto: String(r.DESCRDEP ?? ""),
-          senior: mapNivelToLabel(r.SENHORIDADE),
-          anos: Number(r.ANOS ?? 0),
-          meses: Number(r.MESES ?? 0),
-          tempo: String(r.TEMPO_CASA ?? ""),
-          hhProd: 0,
-          hhFalta: 0,
-          atingimento: 0,
-          rank: 0,
-        }));
+        const mapped: MembroEquipe[] = rows.map((r: any) => {
+          const raw = r.ATING_COMPORTAM;
+          const has = raw !== null && typeof raw !== "undefined";
+          const pct = has ? clampPct(raw) : null;
+
+          return {
+            id: Number(r.CODFUNC),
+            codfunc: Number(r.CODFUNC),
+            nome: String(r.NOMEFUNC ?? ""),
+            cargo: String(r.DESCRCARGO ?? ""),
+            depto: String(r.DESCRDEP ?? ""),
+            senior: mapNivelToLabel(r.SENHORIDADE),
+            anos: Number(r.ANOS ?? 0),
+            meses: Number(r.MESES ?? 0),
+            tempo: String(r.TEMPO_CASA ?? ""),
+            hhProd: 0,
+            hhFalta: 0,
+            atingimento: 0,
+            rank: 0,
+            atingComportam: pct,
+          };
+        });
 
         setBase(mapped);
 
@@ -343,14 +402,35 @@ export default function EquipePage() {
       data = data.filter((c) => c.senior === senior);
     }
 
+    // ✅ filtro: com nota / sem nota / todos
+    if (comport === "Com nota") {
+      data = data.filter((c) => c.atingComportam !== null);
+    } else if (comport === "Sem nota") {
+      data = data.filter((c) => c.atingComportam === null);
+    }
+
     data.sort((a, b) => {
       const dir = sortAsc ? 1 : -1;
 
       switch (sortKey) {
         case "rank":
           return (a.rank - b.rank) * dir;
+
         case "atingimento":
           return (a.atingimento - b.atingimento) * dir;
+
+        case "comportam": {
+          // ✅ null sempre vai pro final (independente do asc/desc)
+          const av = a.atingComportam;
+          const bv = b.atingComportam;
+          const aNull = av === null;
+          const bNull = bv === null;
+          if (aNull && bNull) return a.nome.localeCompare(b.nome) * dir;
+          if (aNull) return 1; // a depois
+          if (bNull) return -1; // b depois
+          return ((av as number) - (bv as number)) * dir;
+        }
+
         case "nome":
           return a.nome.localeCompare(b.nome) * dir;
         case "cargo":
@@ -365,13 +445,15 @@ export default function EquipePage() {
     });
 
     return data;
-  }, [base, q, senior, sortKey, sortAsc]);
+  }, [base, q, senior, comport, sortKey, sortAsc]);
 
   // ----------------- Exportar CSV -----------------
   const exportCsv = () => {
     const header = [
       "rank",
       "atingimento_geral",
+      "ating_comportam",
+      "tem_nota_comportam",
       "codfunc",
       "nome",
       "cargo",
@@ -383,6 +465,8 @@ export default function EquipePage() {
     const rows = list.map((c) => [
       c.rank,
       c.atingimento,
+      c.atingComportam === null ? "" : c.atingComportam,
+      c.atingComportam === null ? "N" : "S",
       c.codfunc,
       c.nome,
       c.cargo,
@@ -396,7 +480,8 @@ export default function EquipePage() {
         r
           .map((v) => {
             const s = String(v ?? "");
-            if (s.includes(",") || s.includes('"') || s.includes("\n")) return `"${s.replace(/"/g, '""')}"`;
+            if (s.includes(",") || s.includes('"') || s.includes("\n"))
+              return `"${s.replace(/"/g, '""')}"`;
             return s;
           })
           .join(",")
@@ -412,16 +497,6 @@ export default function EquipePage() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-  };
-
-  // ---- Navegar para Alocação ----
-  const irParaAlocacao = (c: MembroEquipe) => {
-    const qs = new URLSearchParams({
-      colabId: String(c.codfunc),
-      colabNome: c.nome,
-      cargo: c.cargo,
-    }).toString();
-    navigate(`/atividades/alocacao/OP-0000?${qs}`);
   };
 
   // ---- Navegar para Detalhes ----
@@ -489,7 +564,10 @@ export default function EquipePage() {
         nivel: newSkill.nivel,
       };
 
-      setSkillsMap((prev) => ({ ...prev, [codfunc]: [...(prev[codfunc] || []), nova] }));
+      setSkillsMap((prev) => ({
+        ...prev,
+        [codfunc]: [...(prev[codfunc] || []), nova],
+      }));
       setNewSkill({ codprod: "", nivel: "Básico" });
       alert("Habilidade incluída com sucesso.");
     } catch (e: any) {
@@ -519,9 +597,17 @@ export default function EquipePage() {
       // padrão: atingimento desc, rank asc, resto asc
       if (key === "atingimento") setSortAsc(false);
       else if (key === "rank") setSortAsc(true);
+      else if (key === "comportam") setSortAsc(false);
       else setSortAsc(true);
     }
   };
+
+  const resumoComport = useMemo(() => {
+    const total = base.length;
+    const comNota = base.filter((c) => c.atingComportam !== null).length;
+    const semNota = total - comNota;
+    return { total, comNota, semNota };
+  }, [base]);
 
   return (
     <div className="relative flex flex-col h-full">
@@ -534,18 +620,60 @@ export default function EquipePage() {
           onChange={(e) => setQ(e.target.value)}
         />
 
+        {/* Senioridade */}
         <div className="flex items-center gap-2">
-          <Button variant={senior === "Júnior" ? "default" : "outline"} size="sm" onClick={() => setSenior(senior === "Júnior" ? "Todos" : "Júnior")}>
+          <Button
+            variant={senior === "Júnior" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSenior(senior === "Júnior" ? "Todos" : "Júnior")}
+          >
             Júnior
           </Button>
-          <Button variant={senior === "Pleno" ? "default" : "outline"} size="sm" onClick={() => setSenior(senior === "Pleno" ? "Todos" : "Pleno")}>
+          <Button
+            variant={senior === "Pleno" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSenior(senior === "Pleno" ? "Todos" : "Pleno")}
+          >
             Pleno
           </Button>
-          <Button variant={senior === "Sênior" ? "default" : "outline"} size="sm" onClick={() => setSenior(senior === "Sênior" ? "Todos" : "Sênior")}>
+          <Button
+            variant={senior === "Sênior" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSenior(senior === "Sênior" ? "Todos" : "Sênior")}
+          >
             Sênior
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setSenior("Todos")}>
             Todos
+          </Button>
+        </div>
+
+        {/* ✅ Filtro Comportamental */}
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-[11px]">
+            Avaliação: {resumoComport.comNota} com nota • {resumoComport.semNota} sem nota
+          </Badge>
+
+          <Button
+            variant={comport === "Todos" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setComport("Todos")}
+          >
+            Todos
+          </Button>
+          <Button
+            variant={comport === "Com nota" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setComport("Com nota")}
+          >
+            Com nota
+          </Button>
+          <Button
+            variant={comport === "Sem nota" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setComport("Sem nota")}
+          >
+            Sem nota
           </Button>
         </div>
 
@@ -573,28 +701,56 @@ export default function EquipePage() {
             <div className="max-h-[calc(100vh-220px)] overflow-y-auto">
               {/* Header fixo */}
               <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b">
+                {/* ✅ nova distribuição: 1 + 3 + 2 + 2 + 1 + 1 + 2 = 12 */}
                 <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[11px] text-muted-foreground">
-                  <button className="col-span-1 text-left inline-flex items-center gap-1" onClick={() => toggleSort("rank")}>
+                  <button
+                    className="col-span-1 text-left inline-flex items-center gap-1"
+                    onClick={() => toggleSort("rank")}
+                  >
                     Rank <ArrowUpDown className="h-3 w-3" />
                   </button>
 
-                  <button className="col-span-4 text-left inline-flex items-center gap-1" onClick={() => toggleSort("nome")}>
+                  <button
+                    className="col-span-3 text-left inline-flex items-center gap-1"
+                    onClick={() => toggleSort("nome")}
+                  >
                     Colaborador <ArrowUpDown className="h-3 w-3" />
                   </button>
 
-                  <button className="col-span-2 text-left inline-flex items-center gap-1" onClick={() => toggleSort("cargo")}>
+                  <button
+                    className="col-span-2 text-left inline-flex items-center gap-1"
+                    onClick={() => toggleSort("cargo")}
+                  >
                     Cargo <ArrowUpDown className="h-3 w-3" />
                   </button>
 
-                  <button className="col-span-2 text-left inline-flex items-center gap-1" onClick={() => toggleSort("depto")}>
+                  <button
+                    className="col-span-2 text-left inline-flex items-center gap-1"
+                    onClick={() => toggleSort("depto")}
+                  >
                     Depto <ArrowUpDown className="h-3 w-3" />
                   </button>
 
-                  <button className="col-span-1 text-left inline-flex items-center gap-1" onClick={() => toggleSort("tempo")}>
+                  <button
+                    className="col-span-1 text-left inline-flex items-center gap-1"
+                    onClick={() => toggleSort("tempo")}
+                  >
                     Tempo <ArrowUpDown className="h-3 w-3" />
                   </button>
 
-                  <button className="col-span-2 text-left inline-flex items-center gap-1" onClick={() => toggleSort("atingimento")}>
+                  {/* ✅ novo */}
+                  <button
+                    className="col-span-1 text-left inline-flex items-center gap-1"
+                    onClick={() => toggleSort("comportam")}
+                    title="Atingimento médio da avaliação comportamental"
+                  >
+                    Comport. <ArrowUpDown className="h-3 w-3" />
+                  </button>
+
+                  <button
+                    className="col-span-2 text-left inline-flex items-center gap-1"
+                    onClick={() => toggleSort("atingimento")}
+                  >
                     Atingimento <ArrowUpDown className="h-3 w-3" />
                   </button>
                 </div>
@@ -604,8 +760,12 @@ export default function EquipePage() {
               <div className="divide-y">
                 {list.map((c) => {
                   const disp = disponibilidadeColor(c.hhFalta);
-                  const at = Math.max(0, Math.min(100, Number(c.atingimento || 0)));
+
+                  const at = clampPct(c.atingimento || 0);
                   const tone = atingimentoTone(at);
+
+                  const comp = c.atingComportam; // number|null
+                  const compTone = comportTone(comp);
 
                   return (
                     <div
@@ -620,7 +780,7 @@ export default function EquipePage() {
                       </div>
 
                       {/* Colaborador */}
-                      <div className="col-span-4 flex items-center gap-3 min-w-0">
+                      <div className="col-span-3 flex items-center gap-3 min-w-0">
                         <Avatar className="h-9 w-9">
                           <AvatarImage
                             src={fotoUrl(c.codfunc)}
@@ -637,18 +797,19 @@ export default function EquipePage() {
 
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-medium truncate max-w-[320px]">{c.nome}</p>
+                            <p className="text-sm font-medium truncate max-w-[260px]">{c.nome}</p>
+
                             <Badge variant="secondary" className="rounded-full text-[10px]">
                               {c.senior}
                             </Badge>
+
                             <Badge variant="outline" className="rounded-full text-[10px]">
                               <span className={`mr-1 inline-block h-2 w-2 rounded-full ${disp.dot}`} />
                               {disp.label}
                             </Badge>
                           </div>
-                          <p className="text-[11px] text-muted-foreground">
-                            COD {c.codfunc}
-                          </p>
+
+                          <p className="text-[11px] text-muted-foreground">COD {c.codfunc}</p>
                         </div>
                       </div>
 
@@ -667,6 +828,16 @@ export default function EquipePage() {
                         <p className="text-xs text-muted-foreground">{c.tempo}</p>
                       </div>
 
+                      {/* ✅ Comportamental */}
+                      <div className="col-span-1">
+                        <Badge variant="outline" className={`text-[10px] ${compTone.cls}`}>
+                          {comp === null ? "—" : `${comp}%`}
+                        </Badge>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          {compTone.label}
+                        </p>
+                      </div>
+
                       {/* Atingimento + Ações */}
                       <div className="col-span-2">
                         <div className="flex items-center justify-between gap-2">
@@ -675,13 +846,23 @@ export default function EquipePage() {
                           </Badge>
 
                           <div className="flex gap-1">
-                            <Button variant="outline" size="sm" className="h-8 px-2 text-[11px]" onClick={() => irParaDetalhes(c)}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-2 text-[11px]"
+                              onClick={() => irParaDetalhes(c)}
+                            >
                               Detalhes <ChevronRight className="h-3 w-3 ml-1" />
                             </Button>
-                            <Button variant="ghost" size="sm" className="h-8 px-2 text-[11px]" onClick={() => abrirHabilidades(c)}>
+
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 px-2 text-[11px]"
+                              onClick={() => abrirHabilidades(c)}
+                            >
                               Habs
                             </Button>
-                           
                           </div>
                         </div>
 
@@ -708,7 +889,10 @@ export default function EquipePage() {
       {/* ===== Side-sheet Habilidades ===== */}
       {skillsOpenFor && (
         <div className="fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={fecharHabilidades} />
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={fecharHabilidades}
+          />
 
           <div className="absolute right-0 top-0 h-full w-full max-w-lg bg-white shadow-xl border-l">
             <div className="flex items-center justify-between p-4 border-b">
@@ -750,21 +934,34 @@ export default function EquipePage() {
                   </div>
 
                   {skillsLoading ? (
-                    <div className="px-3 py-4 text-sm text-muted-foreground">Carregando habilidades…</div>
+                    <div className="px-3 py-4 text-sm text-muted-foreground">
+                      Carregando habilidades…
+                    </div>
                   ) : skillsErro ? (
                     <div className="px-3 py-4 text-sm text-red-600">{skillsErro}</div>
                   ) : (skillsMap[skillsOpenFor.codfunc] || []).length === 0 ? (
-                    <div className="px-3 py-6 text-sm text-muted-foreground">Nenhuma habilidade cadastrada ainda.</div>
+                    <div className="px-3 py-6 text-sm text-muted-foreground">
+                      Nenhuma habilidade cadastrada ainda.
+                    </div>
                   ) : (
                     (skillsMap[skillsOpenFor.codfunc] || []).map((s) => (
-                      <div key={`${s.codprod}-${s.dtInclusao}`} className="grid grid-cols-12 items-center px-3 py-2 gap-2">
+                      <div
+                        key={`${s.codprod}-${s.dtInclusao}`}
+                        className="grid grid-cols-12 items-center px-3 py-2 gap-2"
+                      >
                         <div className="col-span-7">
                           <div className="font-medium text-sm">{s.descrprod}</div>
-                          <div className="text-[11px] text-muted-foreground">Cód. produto: {s.codprod}</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            Cód. produto: {s.codprod}
+                          </div>
                         </div>
                         <div className="col-span-3">
-                          <Badge variant="outline" className="text-[11px]">{s.nivel}</Badge>
-                          <p className="text-[11px] text-muted-foreground mt-1">Desde: {s.dtInclusao}</p>
+                          <Badge variant="outline" className="text-[11px]">
+                            {s.nivel}
+                          </Badge>
+                          <p className="text-[11px] text-muted-foreground mt-1">
+                            Desde: {s.dtInclusao}
+                          </p>
                         </div>
                         <div className="col-span-2 text-right">
                           <Button

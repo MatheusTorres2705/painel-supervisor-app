@@ -51,6 +51,8 @@ export const Layout: React.FC<PropsWithChildren> = ({ children }) => {
       ? "Alocação de Recursos"
       : pathname.startsWith("/atividades")
       ? "Planejamento de Atividades"
+      : pathname.startsWith("/hora-extra")
+      ? "Hora Extra"
       : pathname.startsWith("/materiais")
       ? "Planejamento de Materiais"
       : pathname.startsWith("/calendario")
@@ -77,6 +79,7 @@ export const Layout: React.FC<PropsWithChildren> = ({ children }) => {
               <Item to="/atividades" icon={<ClipboardList className="h-4 w-4" />} label="Atividades / OP" />
               <Item to="/materiais" icon={<PackageSearch className="h-4 w-4" />} label="Materiais" />
               <Item to="/calendario" icon={<CalendarDays className="h-4 w-4" />} label="Calendário" />
+              <Item to="/hora-extra" icon={<KanbanSquare className="h-4 w-4" />} label="Hora Extra" />
               <Item to="/plano-acao" icon={<KanbanSquare className="h-4 w-4" />} label="Plano de Ação" />
             </div>
           </div>
