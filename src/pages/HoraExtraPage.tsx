@@ -57,11 +57,18 @@ type HoraExtraRow = {
   codBcoHrFun: number;
   codfunc: number;
   nomefunc: string;
-  dtuso: string; // YYYY-MM-DD
+
+  dtuso: string; // YYYY-MM-DD (para ordenar / filtros)
+  dtusoBR: string; // DD/MM/YYYY (para exibir)
+
   hrini: string;
   hrfin: string;
   coddep: number;
   liberado: "S" | "N";
+
+  codigoSupervisor: number; // SUP.CODUSU
+  nomeSupervisor: string;   // SUP.NOMEUSU
+  nomeSolicitante: string;  // SOL.NOMEUSU
 };
 
 type DepOpt = { coddep: number; descrdep: string };
@@ -110,6 +117,13 @@ function liberadoBadge(l: "S" | "N") {
     : "bg-amber-50 text-amber-800 border-amber-200";
 }
 
+function ymdToBrDate(ymd: string) {
+  // "2026-01-12" -> "12/01/2026"
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return "";
+  const [y, m, d] = ymd.split("-");
+  return `${d}/${m}/${y}`;
+}
+
 const fotoUrl = (codfunc: number) =>
   `http://sankhya.nxboats.com.br:8180/mge/Funcionario@IMAGEM@CODEMP=1@CODFUNC=${codfunc}.dbimage`;
 
@@ -118,13 +132,6 @@ const fotoUrl = (codfunc: number) =>
  * troque aqui para "DTUSU".
  */
 const CAB_DATE_FIELD: "DTUSO" | "DTUSU" = "DTUSO";
-
-function ymdToBrDate(ymd: string) {
-  // "2026-01-12" -> "12/01/2026"
-  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return "";
-  const [y, m, d] = ymd.split("-");
-  return `${d}/${m}/${y}`;
-}
 
 export default function HoraExtraPage() {
   const { user } = useAuth();
@@ -209,8 +216,9 @@ export default function HoraExtraPage() {
       const dtIniOk = dtIni && /^\d{4}-\d{2}-\d{2}$/.test(dtIni);
       const dtFimOk = dtFim && /^\d{4}-\d{2}-\d{2}$/.test(dtFim);
 
+      // ✅ SQL ajustado conforme sua regra e com SUP/SOL
       const sql = `
-        SELECT
+        SELECT 
           HR.CODBANCOHORAS,
           FUN.CODBCOHRFUN,
           F.CODFUNC,
@@ -219,11 +227,16 @@ export default function HoraExtraPage() {
           HR.HRINI,
           HR.HRFIN,
           HR.CODDEP,
-          NVL(FUN.LIBERADO,'N') AS LIBERADO
+          NVL(FUN.LIBERADO,'N') AS LIBERADO,
+          SUP.CODUSU AS CODIGO_SUPERVISOR,
+          SUP.NOMEUSU AS NOME_SUPERVISOR,
+          SOL.NOMEUSU AS NOME_SOLICITANTE
         FROM AD_BANCOHORAS HR
         JOIN AD_BCOFUN FUN ON FUN.CODBANCOHORAS = HR.CODBANCOHORAS
         JOIN TFPFUN F ON F.CODFUNC = FUN.CODFUNC
-        WHERE F.USUVPJSUP = ${Number(CODUSU_SUP)}
+        JOIN TSIUSU SUP ON SUP.CODUSU = F.USUVPJSUP
+        JOIN TSIUSU SOL ON SOL.CODUSU = HR.CODUSU
+        WHERE (F.USUVPJSUP = ${Number(CODUSU_SUP)} OR HR.CODUSU = ${Number(CODUSU_SUP)})
           AND TO_CHAR(HR.DTUSO, 'MM/YYYY') = '${mmYYYY}'
           ${depDigits ? `AND HR.CODDEP = ${Number(depDigits)}` : ""}
           ${dtIniOk ? `AND TRUNC(HR.DTUSO) >= TO_DATE('${dtIni}', 'YYYY-MM-DD')` : ""}
@@ -235,17 +248,27 @@ export default function HoraExtraPage() {
 
       const r = await obterReg(sql);
 
-      const mapped: HoraExtraRow[] = r.map((x: any) => ({
-        codBancoHoras: Number(x.CODBANCOHORAS),
-        codBcoHrFun: Number(x.CODBCOHRFUN),
-        codfunc: Number(x.CODFUNC),
-        nomefunc: String(x.NOMEFUNC ?? ""),
-        dtuso: String(x.DTUSO ?? ""),
-        hrini: String(x.HRINI ?? ""),
-        hrfin: String(x.HRFIN ?? ""),
-        coddep: Number(x.CODDEP ?? 0),
-        liberado: (String(x.LIBERADO ?? "N").toUpperCase() === "S" ? "S" : "N") as "S" | "N",
-      }));
+      const mapped: HoraExtraRow[] = r.map((x: any) => {
+        const ymd = String(x.DTUSO ?? "");
+        return {
+          codBancoHoras: Number(x.CODBANCOHORAS),
+          codBcoHrFun: Number(x.CODBCOHRFUN),
+          codfunc: Number(x.CODFUNC),
+          nomefunc: String(x.NOMEFUNC ?? ""),
+
+          dtuso: ymd,
+          dtusoBR: ymdToBrDate(ymd) || ymd,
+
+          hrini: String(x.HRINI ?? ""),
+          hrfin: String(x.HRFIN ?? ""),
+          coddep: Number(x.CODDEP ?? 0),
+          liberado: (String(x.LIBERADO ?? "N").toUpperCase() === "S" ? "S" : "N") as "S" | "N",
+
+          codigoSupervisor: Number(x.CODIGO_SUPERVISOR ?? 0),
+          nomeSupervisor: String(x.NOME_SUPERVISOR ?? ""),
+          nomeSolicitante: String(x.NOME_SOLICITANTE ?? ""),
+        };
+      });
 
       setRows(mapped);
     } catch (e: any) {
@@ -273,7 +296,7 @@ export default function HoraExtraPage() {
         case "funcionario":
           return a.nomefunc.localeCompare(b.nomefunc) * dir;
         case "data":
-          return a.dtuso.localeCompare(b.dtuso) * dir;
+          return a.dtuso.localeCompare(b.dtuso) * dir; // ordena pelo YYYY-MM-DD
         case "liberado":
           return a.liberado.localeCompare(b.liberado) * dir;
         case "ini":
@@ -319,6 +342,9 @@ export default function HoraExtraPage() {
       "hrfin",
       "coddep",
       "liberado",
+      "codigo_supervisor",
+      "nome_supervisor",
+      "nome_solicitante",
     ];
 
     const body = list.map((r) => [
@@ -327,11 +353,14 @@ export default function HoraExtraPage() {
       r.codBcoHrFun,
       r.codfunc,
       r.nomefunc,
-      r.dtuso,
+      r.dtusoBR, // ✅ exporta em BR
       r.hrini,
       r.hrfin,
       r.coddep,
       r.liberado,
+      r.codigoSupervisor,
+      r.nomeSupervisor,
+      r.nomeSolicitante,
     ]);
 
     const csv = [header, ...body]
@@ -366,7 +395,7 @@ export default function HoraExtraPage() {
 
     doc.setFontSize(9);
     doc.text(
-      `Supervisor CODUSU: ${CODUSU_SUP}  |  Filtros: dep=${safeDigits(coddep) || "todos"}  liberado=${liberado}  nome=${
+      `CODUSU: ${CODUSU_SUP}  |  Filtros: dep=${safeDigits(coddep) || "todos"}  liberado=${liberado}  nome=${
         nomeFunc || "todos"
       }  dtIni=${dtIni || "-"}  dtFim=${dtFim || "-"}`,
       14,
@@ -386,6 +415,8 @@ export default function HoraExtraPage() {
           "HRFIN",
           "CODDEP",
           "LIBERADO",
+          "SUPERVISOR",
+          "SOLICITANTE",
         ],
       ],
       body: list.map((r) => [
@@ -393,11 +424,13 @@ export default function HoraExtraPage() {
         r.codBcoHrFun,
         r.codfunc,
         r.nomefunc,
-        r.dtuso,
+        r.dtusoBR, // ✅ BR
         r.hrini,
         r.hrfin,
         r.coddep,
         r.liberado,
+        r.nomeSupervisor,
+        r.nomeSolicitante,
       ]),
       styles: { fontSize: 8, cellPadding: 2 },
       headStyles: { fontSize: 8 },
@@ -417,15 +450,33 @@ export default function HoraExtraPage() {
     setAprovarTarget(null);
   };
 
-  // ✅ APROVAR VIA dataset/save (mantido)
+  // ✅ APROVAR VIA dataset/save (só aparece para o supervisor do colaborador)
   const aprovar = async () => {
     if (!aprovarTarget) return;
+
+    if (aprovarTarget.codigoSupervisor !== CODUSU_SUP) {
+      setRetornoInfo({
+        title: "Sem permissão",
+        resumo: "A aprovação só pode ser realizada pelo supervisor de destino do colaborador.",
+        human:
+          `Supervisor do colaborador: ${aprovarTarget.nomeSupervisor} (CODUSU ${aprovarTarget.codigoSupervisor})\n` +
+          `Usuário logado: CODUSU ${CODUSU_SUP}`,
+      });
+      setRetornoOpen(true);
+      fecharAprovar();
+      return;
+    }
 
     if (aprovarTarget.liberado === "S") {
       setRetornoInfo({
         title: "Já liberado",
         resumo: "Este registro já está com LIBERADO = S.",
-        human: `Funcionário: ${aprovarTarget.nomefunc}\nData: ${aprovarTarget.dtuso}\nHorário: ${aprovarTarget.hrini} → ${aprovarTarget.hrfin}\nPK: CODBANCOHORAS ${aprovarTarget.codBancoHoras} • CODBCOHRFUN ${aprovarTarget.codBcoHrFun}`,
+        human:
+          `Funcionário: ${aprovarTarget.nomefunc}\n` +
+          `Data: ${aprovarTarget.dtusoBR}\n` +
+          `Horário: ${aprovarTarget.hrini} → ${aprovarTarget.hrfin}\n` +
+          `Supervisor: ${aprovarTarget.nomeSupervisor}\nSolicitante: ${aprovarTarget.nomeSolicitante}\n` +
+          `PK: CODBANCOHORAS ${aprovarTarget.codBancoHoras} • CODBCOHRFUN ${aprovarTarget.codBcoHrFun}`,
       });
       setRetornoOpen(true);
       fecharAprovar();
@@ -463,7 +514,8 @@ export default function HoraExtraPage() {
 
       setRows((prev) =>
         prev.map((x) =>
-          x.codBancoHoras === aprovarTarget.codBancoHoras && x.codBcoHrFun === aprovarTarget.codBcoHrFun
+          x.codBancoHoras === aprovarTarget.codBancoHoras &&
+          x.codBcoHrFun === aprovarTarget.codBcoHrFun
             ? { ...x, liberado: "S" }
             : x
         )
@@ -477,8 +529,9 @@ export default function HoraExtraPage() {
         resumo: "LIBERADO = S gravado com sucesso no Sankhya.",
         human:
           `Funcionário: ${aprovarTarget.nomefunc}\n` +
-          `Data: ${aprovarTarget.dtuso}\n` +
+          `Data: ${aprovarTarget.dtusoBR}\n` +
           `Horário: ${aprovarTarget.hrini} → ${aprovarTarget.hrfin}\n` +
+          `Supervisor: ${aprovarTarget.nomeSupervisor}\nSolicitante: ${aprovarTarget.nomeSolicitante}\n` +
           `Depto: ${aprovarTarget.coddep}\n` +
           `PK: CODBANCOHORAS ${aprovarTarget.codBancoHoras} • CODBCOHRFUN ${aprovarTarget.codBcoHrFun}`,
       });
@@ -524,7 +577,7 @@ export default function HoraExtraPage() {
     }
   };
 
-  // ✅ De-dup por CODFUNC (evita “duplicando colaboradores”)
+  // ✅ De-dup por CODFUNC (evita duplicidade)
   const carregarFuncs = async () => {
     try {
       setFuncsLoading(true);
@@ -695,10 +748,10 @@ export default function HoraExtraPage() {
         fields: ["CODUSU", CAB_DATE_FIELD, "CODDEP", "HRINI", "HRFIN"],
         values: {
           "0": String(CODUSU_SUP),
-          "1": dtBr, // "DD/MM/YYYY"
+          "1": dtBr,          // DD/MM/YYYY
           "2": String(planCoddep),
-          "3": hrIniHHMM, // "2232"
-          "4": hrFinHHMM, // "2359"
+          "3": hrIniHHMM,     // 2232
+          "4": hrFinHHMM,     // 2359
         },
       };
 
@@ -810,14 +863,13 @@ export default function HoraExtraPage() {
           resumo: `Cabeçalho + ${ok} funcionário(s) inseridos com sucesso.`,
           human:
             `CODBANCOHORAS: ${codBancoHoras}\n` +
-            `CODUSU: ${CODUSU_SUP}\nCODDEP: ${planCoddep}\n${CAB_DATE_FIELD}: ${planDtUso}\n` +
+            `CODUSU (solicitante): ${CODUSU_SUP}\nCODDEP: ${planCoddep}\n${CAB_DATE_FIELD}: ${planDtUso}\n` +
             `HRINI: ${planHrIni} (${hrIniHHMM})\nHRFIN: ${planHrFin} (${hrFinHHMM})\n\n` +
             `Funcionários inseridos: ${ok}`,
           transactionId: parsedCab.transactionId,
         });
         setRetornoOpen(true);
 
-        // fecha e reseta
         setNovoPlanOpen(false);
         resetNovoPlanejamento();
       }
@@ -917,7 +969,7 @@ export default function HoraExtraPage() {
             <div>
               <p className="text-sm font-semibold">Hora Extra — por funcionário e data</p>
               <p className="text-[11px] text-muted-foreground">
-                Supervisor CODUSU: <span className="font-medium">{CODUSU_SUP || "-"}</span> • Mês:{" "}
+                CODUSU logado: <span className="font-medium">{CODUSU_SUP || "-"}</span> • Mês:{" "}
                 <span className="font-medium">{mmYYYY || "-"}</span>
               </p>
             </div>
@@ -968,65 +1020,76 @@ export default function HoraExtraPage() {
               </div>
 
               <div className="divide-y">
-                {list.map((r) => (
-                  <div
-                    key={`${r.codBancoHoras}-${r.codBcoHrFun}`}
-                    className="grid grid-cols-12 gap-2 px-3 py-3 items-center hover:bg-muted/40 transition"
-                  >
-                    <div className="col-span-2">
-                      <div className="flex flex-col gap-1">
-                        <Badge variant="outline" className="text-[11px]">
-                          {r.codBancoHoras}
+                {list.map((r) => {
+                  const canApprove = r.codigoSupervisor === CODUSU_SUP; // ✅ regra do botão
+                  return (
+                    <div
+                      key={`${r.codBancoHoras}-${r.codBcoHrFun}`}
+                      className="grid grid-cols-12 gap-2 px-3 py-3 items-center hover:bg-muted/40 transition"
+                    >
+                      <div className="col-span-2">
+                        <div className="flex flex-col gap-1">
+                          <Badge variant="outline" className="text-[11px]">
+                            {r.codBancoHoras}
+                          </Badge>
+                          <span className="text-[10px] text-muted-foreground">Cód: {r.codBcoHrFun}</span>
+                        </div>
+                      </div>
+
+                      <div className="col-span-4 min-w-0">
+                        <p className="text-sm font-medium truncate">{r.nomefunc}</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          CODFUNC {r.codfunc} • Supervisor: <span className="font-medium">{r.nomeSupervisor}</span>
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Solicitante: <span className="font-medium">{r.nomeSolicitante}</span>
+                        </p>
+                      </div>
+
+                      <div className="col-span-2">
+                        <p className="text-sm font-medium">{r.dtusoBR}</p> {/* ✅ DD/MM/YYYY */}
+                        <p className="text-[11px] text-muted-foreground">DTUSO</p>
+                      </div>
+
+                      <div className="col-span-1">
+                        <Badge variant="secondary" className="text-[11px]">
+                          {r.coddep}
                         </Badge>
-                        <span className="text-[10px] text-muted-foreground">Cód: {r.codBcoHrFun}</span>
+                      </div>
+
+                      <div className="col-span-1">
+                        <p className="text-sm font-medium">{r.hrini}</p>
+                      </div>
+
+                      <div className="col-span-1">
+                        <p className="text-sm font-medium">{r.hrfin}</p>
+                      </div>
+
+                      <div className="col-span-1 text-right">
+                        <Badge variant="outline" className={`text-[10px] ${liberadoBadge(r.liberado)}`}>
+                          {r.liberado}
+                        </Badge>
+                      </div>
+
+                      <div className="col-span-12 flex justify-end gap-2 pt-2">
+                        {/* ✅ só mostra se usuário logado for o supervisor do colaborador */}
+                        {canApprove && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-2"
+                            onClick={() => abrirAprovar(r)}
+                            disabled={r.liberado === "S"}
+                            title={r.liberado === "S" ? "Já liberado" : "Aprovar e marcar LIBERADO = S"}
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            {r.liberado === "S" ? "Liberado" : "Aprovar"}
+                          </Button>
+                        )}
                       </div>
                     </div>
-
-                    <div className="col-span-4 min-w-0">
-                      <p className="text-sm font-medium truncate">{r.nomefunc}</p>
-                      <p className="text-[11px] text-muted-foreground">CODFUNC {r.codfunc}</p>
-                    </div>
-
-                    <div className="col-span-2">
-                      <p className="text-sm font-medium">{r.dtuso}</p>
-                      <p className="text-[11px] text-muted-foreground">DTUSO</p>
-                    </div>
-
-                    <div className="col-span-1">
-                      <Badge variant="secondary" className="text-[11px]">
-                        {r.coddep}
-                      </Badge>
-                    </div>
-
-                    <div className="col-span-1">
-                      <p className="text-sm font-medium">{r.hrini}</p>
-                    </div>
-
-                    <div className="col-span-1">
-                      <p className="text-sm font-medium">{r.hrfin}</p>
-                    </div>
-
-                    <div className="col-span-1 text-right">
-                      <Badge variant="outline" className={`text-[10px] ${liberadoBadge(r.liberado)}`}>
-                        {r.liberado}
-                      </Badge>
-                    </div>
-
-                    <div className="col-span-12 flex justify-end gap-2 pt-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="gap-2"
-                        onClick={() => abrirAprovar(r)}
-                        disabled={r.liberado === "S"}
-                        title={r.liberado === "S" ? "Já liberado" : "Aprovar e marcar LIBERADO = S"}
-                      >
-                        <CheckCircle2 className="h-4 w-4" />
-                        {r.liberado === "S" ? "Liberado" : "Aprovar"}
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
 
                 {!list.length && <div className="p-6 text-sm text-muted-foreground">Nenhum registro encontrado com os filtros atuais.</div>}
               </div>
@@ -1071,8 +1134,12 @@ export default function HoraExtraPage() {
                   #{aprovarTarget?.codBancoHoras} • PKFUN {aprovarTarget?.codBcoHrFun}
                 </p>
                 <p className="text-xs text-slate-600 mt-1">
-                  {aprovarTarget?.nomefunc} • {aprovarTarget?.dtuso} • {aprovarTarget?.hrini} → {aprovarTarget?.hrfin} • CODDEP{" "}
+                  {aprovarTarget?.nomefunc} • {aprovarTarget?.dtusoBR} • {aprovarTarget?.hrini} → {aprovarTarget?.hrfin} • CODDEP{" "}
                   {aprovarTarget?.coddep} • Atual: <strong>{aprovarTarget?.liberado}</strong>
+                </p>
+                <p className="text-xs text-slate-600 mt-1">
+                  Supervisor: <strong>{aprovarTarget?.nomeSupervisor}</strong> • Solicitante:{" "}
+                  <strong>{aprovarTarget?.nomeSolicitante}</strong>
                 </p>
               </div>
             </div>
@@ -1081,7 +1148,15 @@ export default function HoraExtraPage() {
               <Button variant="outline" onClick={fecharAprovar} disabled={aprovando}>
                 Cancelar
               </Button>
-              <Button onClick={aprovar} disabled={aprovando || aprovarTarget?.liberado === "S"} className="gap-2">
+              <Button
+                onClick={aprovar}
+                disabled={
+                  aprovando ||
+                  aprovarTarget?.liberado === "S" ||
+                  (aprovarTarget?.codigoSupervisor ?? 0) !== CODUSU_SUP
+                }
+                className="gap-2"
+              >
                 <CheckCircle2 className="h-4 w-4" />
                 {aprovando ? "Aprovando..." : "Aprovar"}
               </Button>
@@ -1146,7 +1221,7 @@ export default function HoraExtraPage() {
 
               <div className="ml-auto flex items-center gap-2">
                 <Badge variant="outline" className="text-[11px]">
-                  Selecionados: {selectedList.length}
+                  Selecionados: {Object.values(selectedFunc).length}
                 </Badge>
                 {salvandoTudo && (
                   <Badge variant="outline" className="text-[11px]">
@@ -1238,11 +1313,11 @@ export default function HoraExtraPage() {
                             <p className="text-xs text-slate-600 font-medium">Resumo</p>
                             <p className="text-sm text-slate-800 mt-1">
                               Departamento: <strong>{planCoddep ?? "-"}</strong> • Data:{" "}
-                              <strong>{planDtUso || "-"}</strong> • Hr Inicial: <strong>{planHrIni || "-"}</strong> • Hr Final:{" "}
+                              <strong>{planDtUso ? ymdToBrDate(planDtUso) : "-"}</strong> • Hr Inicial: <strong>{planHrIni || "-"}</strong> • Hr Final:{" "}
                               <strong>{planHrFin || "-"}</strong>
                             </p>
                             <p className="text-[11px] text-slate-600 mt-1">
-                              * Avance para selecionar os funcionários. Depois clique em <strong>Salvar planejamento</strong> (ação única).
+                              * Avance para selecionar os funcionários. Depois clique em <strong>Salvar planejamento</strong>.
                             </p>
                           </div>
                         </div>
@@ -1273,7 +1348,7 @@ export default function HoraExtraPage() {
                         </Badge>
 
                         <div className="ml-auto flex items-center gap-2">
-                          <Button variant="outline" size="sm" onClick={() => setSelectedFunc({})} disabled={!selectedList.length || salvandoTudo}>
+                          <Button variant="outline" size="sm" onClick={() => setSelectedFunc({})} disabled={!Object.values(selectedFunc).length || salvandoTudo}>
                             Limpar seleção
                           </Button>
                         </div>
@@ -1363,13 +1438,13 @@ export default function HoraExtraPage() {
                       </div>
 
                       <div className="mt-4 rounded-xl border border-slate-200 p-3">
-                        <p className="text-xs text-slate-600 font-medium">Selecionados ({selectedList.length})</p>
+                        <p className="text-xs text-slate-600 font-medium">Selecionados ({Object.values(selectedFunc).length})</p>
 
-                        {!selectedList.length ? (
+                        {!Object.values(selectedFunc).length ? (
                           <p className="text-sm text-slate-600 mt-2">Nenhum funcionário selecionado.</p>
                         ) : (
                           <div className="mt-2 flex flex-wrap gap-2">
-                            {selectedList.slice(0, 30).map((s) => (
+                            {Object.values(selectedFunc).slice(0, 30).map((s) => (
                               <Badge
                                 key={s.codfunc}
                                 variant="secondary"
@@ -1380,9 +1455,9 @@ export default function HoraExtraPage() {
                                 {s.codfunc} • {s.nomefunc}
                               </Badge>
                             ))}
-                            {selectedList.length > 30 && (
+                            {Object.values(selectedFunc).length > 30 && (
                               <Badge variant="outline" className="text-[11px]">
-                                +{selectedList.length - 30}…
+                                +{Object.values(selectedFunc).length - 30}…
                               </Badge>
                             )}
                           </div>
@@ -1426,9 +1501,9 @@ export default function HoraExtraPage() {
                 ) : (
                   <Button
                     onClick={salvarPlanejamentoTudo}
-                    disabled={salvandoTudo || !canGoDetalhe || !selectedList.length}
+                    disabled={salvandoTudo || !canGoDetalhe || !Object.values(selectedFunc).length}
                     className="gap-2"
-                    title={!selectedList.length ? "Selecione ao menos 1 funcionário" : "Salvar cabeçalho + funcionários"}
+                    title={!Object.values(selectedFunc).length ? "Selecione ao menos 1 funcionário" : "Salvar cabeçalho + funcionários"}
                   >
                     <Plus className="h-4 w-4" />
                     {salvandoTudo ? `Salvando... (${saveProgress.ok}/${saveProgress.total})` : "Salvar planejamento"}
