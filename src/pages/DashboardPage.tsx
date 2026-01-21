@@ -2,7 +2,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
-import { Clock3, Gauge, Factory, Award } from "lucide-react";
+import { Button } from "../components/ui/button";
+import { Clock3, Gauge, Factory, Award, CalendarDays, RefreshCw, Users } from "lucide-react";
 import { mockKpis } from "../lib/mock";
 import {
   ResponsiveContainer,
@@ -28,6 +29,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Input } from "@/components/ui/input";
 
 /* =================== Components =================== */
 const Kpi: React.FC<{
@@ -74,8 +76,8 @@ const Kpi: React.FC<{
 /* =================== Types =================== */
 type BarColab = {
   codfunc: number;
-  name: string; // NOMEFUNC
-  hh: number; // horas (QTD minutos / 60)
+  name: string;
+  hh: number;
 };
 
 type DetAtividade = {
@@ -89,8 +91,14 @@ type SeniorCompareBar = {
   label: string;
   atual: number;
   previsto: number;
-  diff: number; // atual - previsto
-  pct: number | null; // atual/previsto
+  diff: number;
+  pct: number | null;
+};
+
+type SeniorColab = {
+  codfunc: number;
+  nomefunc: string;
+  nivel: "I" | "II" | "III";
 };
 
 type FaltaItem = {
@@ -104,7 +112,7 @@ type FaltaItem = {
 type RetrabItem = {
   setor: string;
   atividade: string;
-  hh: number; // horas
+  hh: number;
 };
 
 /* =================== Helpers =================== */
@@ -139,10 +147,20 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
+function nowYearMonth() {
+  const d = new Date();
+  return { year: String(d.getFullYear()), month: String(d.getMonth() + 1) }; // month 1..12
+}
+
+function monthYearLabel(monthNum: string, year: string) {
+  const mm = pad2(Number(monthNum || 1));
+  return `${mm}/${year}`;
+}
+
 /* =================== Gauge (Velocímetro) =================== */
 const SpeedometerGauge: React.FC<{
-  value: number; // 0..max
-  max?: number; // padrão 100
+  value: number;
+  max?: number;
   title?: string;
 }> = ({ value, max = 100, title }) => {
   const v = clamp(value, 0, max);
@@ -227,26 +245,60 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const data = mockKpis();
 
-  // ===== Avanço da linha (REAL via ERP) =====
+  const CODUSU_LOGADO = (user as any)?.codusu ?? 134;
+
+  // ================== FILTROS GLOBAIS (topo) ==================
+  const initial = useMemo(() => nowYearMonth(), []);
+  const [fAno, setFAno] = useState<string>(initial.year);
+  const [fMes, setFMes] = useState<string>(initial.month);
+
+  const [anoSel, setAnoSel] = useState<string>(initial.year);
+  const [mesSel, setMesSel] = useState<string>(initial.month);
+
+  const MMYYYY_LABEL = useMemo(() => monthYearLabel(mesSel, anoSel), [mesSel, anoSel]);
+  const MMYYYY_PAD = useMemo(() => `${pad2(Number(mesSel))}/${anoSel}`, [mesSel, anoSel]);
+
+  const aplicarFiltros = () => {
+    const y = String(fAno || "").trim();
+    const m = String(fMes || "").trim();
+
+    const yOk = /^\d{4}$/.test(y) ? y : String(new Date().getFullYear());
+    const mNum = Number(m);
+    const mOk =
+      Number.isFinite(mNum) && mNum >= 1 && mNum <= 12
+        ? String(mNum)
+        : String(new Date().getMonth() + 1);
+
+    setAnoSel(yOk);
+    setMesSel(mOk);
+
+    setFAno(yOk);
+    setFMes(mOk);
+  };
+
+  const irParaHoje = () => {
+    const n = nowYearMonth();
+    setFAno(n.year);
+    setFMes(n.month);
+    setAnoSel(n.year);
+    setMesSel(n.month);
+  };
+
+  // ================== ESTADOS ==================
   const [avancoReal, setAvancoReal] = useState<number>(0);
   const [avancoLoading, setAvancoLoading] = useState<boolean>(true);
   const [avancoErro, setAvancoErro] = useState<string | null>(null);
 
-  // ===== Gráfico de atividades por colaborador (real via ERP) =====
   const [barData, setBarData] = useState<BarColab[]>([]);
   const [barLoading, setBarLoading] = useState(true);
   const [barErro, setBarErro] = useState<string | null>(null);
 
-  // ===== Modal de detalhamento (click no gráfico) =====
   const [detOpen, setDetOpen] = useState(false);
-  const [detColab, setDetColab] = useState<{ codfunc: number; name: string } | null>(
-    null
-  );
+  const [detColab, setDetColab] = useState<{ codfunc: number; name: string } | null>(null);
   const [detLoading, setDetLoading] = useState(false);
   const [detErro, setDetErro] = useState<string | null>(null);
   const [detRows, setDetRows] = useState<DetAtividade[]>([]);
 
-  // ===== Materiais faltantes (KPI + modal) =====
   const [faltQtd, setFaltQtd] = useState<number>(0);
   const [faltLoading, setFaltLoading] = useState<boolean>(true);
   const [faltErro, setFaltErro] = useState<string | null>(null);
@@ -256,7 +308,6 @@ export default function DashboardPage() {
   const [faltListErro, setFaltListErro] = useState<string | null>(null);
   const [faltRows, setFaltRows] = useState<FaltaItem[]>([]);
 
-  // ===== Retrabalho (KPI + modal) =====
   const [retrHH, setRetrHH] = useState<number>(0);
   const [retrLoading, setRetrLoading] = useState<boolean>(true);
   const [retrErro, setRetrErro] = useState<string | null>(null);
@@ -266,33 +317,22 @@ export default function DashboardPage() {
   const [retrListErro, setRetrListErro] = useState<string | null>(null);
   const [retrRows, setRetrRows] = useState<RetrabItem[]>([]);
 
-  // ===== Assiduidade (mock com velocímetro) =====
   const [assValue] = useState<number>(87); // mock por enquanto
 
-  // ===== Pirâmide de senioridade (comparativo Real x Previsto) =====
   const [seniorData, setSeniorData] = useState<SeniorCompareBar[]>([]);
   const [seniorLoading, setSeniorLoading] = useState(true);
   const [seniorErro, setSeniorErro] = useState<string | null>(null);
 
-  // (fixo por enquanto, conforme sua query)
+  // ===== Modal: Colaboradores por nível =====
+  const [seniorNivelOpen, setSeniorNivelOpen] = useState(false);
+  const [seniorNivelSel, setSeniorNivelSel] = useState<"I" | "II" | "III" | null>(null);
+  const [seniorNivelLoading, setSeniorNivelLoading] = useState(false);
+  const [seniorNivelErro, setSeniorNivelErro] = useState<string | null>(null);
+  const [seniorNivelRows, setSeniorNivelRows] = useState<SeniorColab[]>([]);
+
   const CODDEP_ALVO = 101040600;
 
-  // (fixo conforme sua consulta de faltantes)
-  const ANO_FALTA = "2026";
-  const MES_FALTA = "1";
-
-  const CODUSU_LOGADO = (user as any)?.codusu ?? 134;
-
-  const MES_ATUAL_LABEL = useMemo(() => {
-    const d = new Date();
-    return `${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
-  }, []);
-
-  // Ano/Mês do avanço (mês atual por padrão, no formato usado no seu WHERE)
-  const ANO_AVANCO = useMemo(() => String(new Date().getFullYear()), []);
-  const MES_AVANCO = useMemo(() => String(Number(pad2(new Date().getMonth() + 1))), []);
-
-  // ======= Avanço: carregar KPI REAL =======
+  // ================== Avanço: KPI REAL (ERP) ==================
   useEffect(() => {
     let cancel = false;
 
@@ -366,8 +406,8 @@ export default function DashboardPage() {
             JOIN TCSPRJ PAI ON PAI.CODPROJ = PRJ.CODPROJPAI
             LEFT JOIN TGFCAB CAB ON PRJ.CODPROJ = CAB.CODPROJ AND CAB.TIPMOV ='P'
             LEFT JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
-            WHERE CRO.ANO = '${ANO_AVANCO}'
-              AND CRO.MES = '${MES_AVANCO}'
+            WHERE CRO.ANO = '${anoSel}'
+              AND CRO.MES = '${mesSel}'
               AND PAI.AD_CODSUPERVISOR = ${CODUSU_SUP}
           ) T
           GROUP BY T.IDIPROC , T.BARCO , T.SEQ , T.DESCRGRUPOPROD, T.CODPROJ, T.IDENTIFICACAO, T.CODPARC, T.NOMEPARC
@@ -389,9 +429,9 @@ export default function DashboardPage() {
     return () => {
       cancel = true;
     };
-  }, [CODUSU_LOGADO, ANO_AVANCO, MES_AVANCO]);
+  }, [CODUSU_LOGADO, anoSel, mesSel]);
 
-  // --------- Detalhamento: carregar atividades do colaborador clicado ----------
+  // ================== Detalhamento do colaborador (sem filtro de mês por enquanto) ==================
   async function carregarDetalhe(codfunc: number, name: string) {
     try {
       setDetLoading(true);
@@ -430,7 +470,7 @@ export default function DashboardPage() {
     }
   }
 
-  // --------- Materiais faltantes: carregar contagem ----------
+  // ================== Materiais faltantes (count) ==================
   useEffect(() => {
     let cancel = false;
 
@@ -440,8 +480,7 @@ export default function DashboardPage() {
         setFaltErro(null);
 
         const sql = `
-          SELECT
-            COUNT(*) AS QTD
+          SELECT COUNT(*) AS QTD
           FROM CND_ONE_LISTA_FALTA F
           JOIN TGFPRO PRO ON PRO.CODPROD = F.CODPROD
           LEFT JOIN AD_LISTADEFALTAMOT MOT
@@ -478,8 +517,8 @@ export default function DashboardPage() {
             ON USU.CODUSU = PAI.AD_CODSUPERVISOR
           WHERE
             F.SALDO_FINAL < 0
-            AND F.ANO IN ('${ANO_FALTA}')
-            AND F.MES IN ('${MES_FALTA}')
+            AND F.ANO IN ('${anoSel}')
+            AND F.MES IN ('${String(Number(mesSel))}')
             AND PAI.AD_CODSUPERVISOR = ${Number(CODUSU_LOGADO)}
             AND NVL(PRO.CODCONFKIT, 0) = 0
             AND NOT PRO.CODPROD IN (
@@ -505,9 +544,9 @@ export default function DashboardPage() {
     return () => {
       cancel = true;
     };
-  }, [CODUSU_LOGADO]);
+  }, [CODUSU_LOGADO, anoSel, mesSel]);
 
-  // --------- Materiais faltantes: abrir modal e carregar lista ----------
+  // ================== Materiais faltantes: modal/lista ==================
   async function abrirFaltantes() {
     setFaltOpen(true);
     if (faltRows.length > 0) return;
@@ -560,8 +599,8 @@ export default function DashboardPage() {
           ON USU.CODUSU = PAI.AD_CODSUPERVISOR
         WHERE
           F.SALDO_FINAL < 0
-          AND F.ANO IN ('${ANO_FALTA}')
-          AND F.MES IN ('${MES_FALTA}')
+          AND F.ANO IN ('${anoSel}')
+          AND F.MES IN ('${String(Number(mesSel))}')
           AND PAI.AD_CODSUPERVISOR = ${Number(CODUSU_LOGADO)}
           AND NVL(PRO.CODCONFKIT, 0) = 0
           AND NOT PRO.CODPROD IN (
@@ -591,7 +630,7 @@ export default function DashboardPage() {
     }
   }
 
-  // ======= Retrabalho: total (mês atual) =======
+  // ================== Retrabalho: total (mês/ano selecionado) ==================
   useEffect(() => {
     let cancel = false;
 
@@ -601,8 +640,7 @@ export default function DashboardPage() {
         setRetrErro(null);
 
         const sql = `
-          SELECT 
-            SUM(APO.QTD) / 60 AS QTD
+          SELECT SUM(APO.QTD) / 60 AS QTD
           FROM AD_CRONOGRAMA CRO
           JOIN AD_COMPONENTECRONO APO ON CRO.SEQ = APO.SEQ 
           JOIN TCSPRJ PRJ ON PRJ.CODPROJ = CRO.CODPROJ 
@@ -614,7 +652,7 @@ export default function DashboardPage() {
           WHERE PAI.AD_CODSUPERVISOR = ${Number(CODUSU_LOGADO)}
             AND APO.FEITO = 'S'
             AND APO.RETRABALHO = 'S'
-            AND TO_CHAR(AV.DATA , 'MM/YYYY') = TO_CHAR(SYSDATE , 'MM/YYYY')
+            AND TO_CHAR(AV.DATA , 'MM/YYYY') = '${MMYYYY_PAD}'
         `.trim();
 
         const rows = await obterReg(sql);
@@ -633,7 +671,7 @@ export default function DashboardPage() {
     return () => {
       cancel = true;
     };
-  }, [CODUSU_LOGADO]);
+  }, [CODUSU_LOGADO, MMYYYY_PAD]);
 
   async function abrirRetrabalho() {
     setRetrOpen(true);
@@ -662,7 +700,7 @@ export default function DashboardPage() {
         WHERE PAI.AD_CODSUPERVISOR = ${Number(CODUSU_LOGADO)}
           AND APO.FEITO = 'S'
           AND APO.RETRABALHO = 'S'
-          AND TO_CHAR(AV.DATA , 'MM/YYYY') = TO_CHAR(SYSDATE , 'MM/YYYY')
+          AND TO_CHAR(AV.DATA , 'MM/YYYY') = '${MMYYYY_PAD}'
         ORDER BY 1
       `.trim();
 
@@ -683,7 +721,7 @@ export default function DashboardPage() {
     }
   }
 
-  // ======= Atividades por colaborador =======
+  // ================== Atividades por colaborador (sem filtro de mês por enquanto) ==================
   useEffect(() => {
     let cancel = false;
 
@@ -712,11 +750,7 @@ export default function DashboardPage() {
           .map((r: any) => {
             const qtdMin = Number(r.QTD ?? 0);
             const hh = Math.round((qtdMin / 60) * 10) / 10;
-            return {
-              codfunc: Number(r.CODFUNC ?? 0),
-              name: String(r.NOMEFUNC ?? ""),
-              hh,
-            };
+            return { codfunc: Number(r.CODFUNC ?? 0), name: String(r.NOMEFUNC ?? ""), hh };
           })
           .filter((x) => x.codfunc > 0)
           .sort((a, b) => b.hh - a.hh);
@@ -736,7 +770,7 @@ export default function DashboardPage() {
     };
   }, [CODUSU_LOGADO]);
 
-  // ======= Pirâmide de senioridade (Real x Previsto) =======
+  // ================== Pirâmide de senioridade (sem filtro de mês por enquanto) ==================
   useEffect(() => {
     let cancel = false;
 
@@ -766,7 +800,6 @@ export default function DashboardPage() {
             JOIN TFPDEP DEP ON DEP.CODDEP = FUN.CODDEP
             WHERE FUN.USUVPJSUP = ${Number(CODUSU_SUP)}
               AND FUN.SITUACAO = '1'
-             -- AND FUN.CODDEP = ${Number(CODDEP_ALVO)}
             GROUP BY CAR.AD_NIVEL, DEP.AD_NIVELI, DEP.AD_NIVELII, DEP.AD_NIVELIII
           )
           GROUP BY NIVEL
@@ -796,7 +829,6 @@ export default function DashboardPage() {
           const previsto = planned[n];
           const diff = atual - previsto;
           const pct = previsto > 0 ? atual / previsto : null;
-
           return { nivel: n, label: nivelLabel(n), atual, previsto, diff, pct };
         });
 
@@ -817,6 +849,53 @@ export default function DashboardPage() {
     };
   }, [CODUSU_LOGADO]);
 
+  // ================== Colaboradores por nível (clique na pirâmide) ==================
+  async function abrirColaboradoresNivel(nivel: "I" | "II" | "III") {
+    setSeniorNivelOpen(true);
+    setSeniorNivelSel(nivel);
+
+    // se já tiver carregado esse nível e quiser evitar nova consulta:
+    // if (seniorNivelRows.length > 0 && seniorNivelSel === nivel) return;
+
+    try {
+      setSeniorNivelLoading(true);
+      setSeniorNivelErro(null);
+      setSeniorNivelRows([]);
+
+      const CODUSU_SUP = Number(CODUSU_LOGADO);
+
+      const sql = `
+        SELECT 
+          FUN.CODFUNC,
+          FUN.NOMEFUNC,
+          CAR.AD_NIVEL
+        FROM TFPFUN FUN
+        JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
+        JOIN TFPDEP DEP ON DEP.CODDEP = FUN.CODDEP
+        WHERE FUN.USUVPJSUP = ${Number(CODUSU_SUP)}
+          AND FUN.SITUACAO = '1'
+          AND CAR.AD_NIVEL = '${nivel}'
+        ORDER BY FUN.NOMEFUNC
+      `.trim();
+
+      const rows = await obterReg(sql);
+
+      const list: SeniorColab[] = (rows || []).map((r: any) => ({
+        codfunc: Number(r.CODFUNC ?? 0),
+        nomefunc: String(r.NOMEFUNC ?? ""),
+        nivel: (normalizeNivel(r?.AD_NIVEL) || nivel) as "I" | "II" | "III",
+      }));
+
+      setSeniorNivelRows(list);
+    } catch (e: any) {
+      console.error("[DashboardPage] Erro ao carregar colaboradores por nível:", e);
+      setSeniorNivelErro(e?.message || "Falha ao carregar os colaboradores do nível selecionado.");
+    } finally {
+      setSeniorNivelLoading(false);
+    }
+  }
+
+  // ================== Derived ==================
   const seniorResumo = useMemo(() => {
     const totalAtual = seniorData.reduce((acc, x) => acc + (x.atual || 0), 0);
     const totalPrev = seniorData.reduce((acc, x) => acc + (x.previsto || 0), 0);
@@ -851,416 +930,597 @@ export default function DashboardPage() {
     return `${Math.round((Number(avancoReal) || 0) * 10) / 10}%`;
   }, [avancoLoading, avancoErro, avancoReal]);
 
+  // força recarregar listas nos modais quando mudar filtro (opcional)
+  useEffect(() => {
+    setFaltRows([]);
+    setRetrRows([]);
+  }, [anoSel, mesSel]);
+
   return (
-    <div className="grid gap-4">
-      {/* Linha de KPIs */}
-      <div className="grid gap-4 xl:grid-cols-4 md:grid-cols-2">
-        <Kpi
-          icon={<Clock3 className="h-4 w-4" />}
-          label="HE disponível × consumida"
-          value={`${data.he.cons} / ${data.he.disp} h`}
-          detail="Mês atual"
-        />
+    // ✅ Scroll na página inteira
+    <div className="h-[calc(100vh-90px)] overflow-y-auto pr-2">
+      <div className="grid gap-4">
+        {/* ================== Filtros globais ================== */}
+        <Card className="sticky top-0 z-20 bg-background/95 backdrop-blur border">
+          <CardContent className="py-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                <div className="text-sm font-semibold">Filtros</div>
+                <Badge variant="secondary" className="ml-1">
+                  {MMYYYY_LABEL}
+                </Badge>
+              </div>
 
-        {/* ✅ Avanço REAL (ERP) */}
-        <Kpi
-          icon={<Gauge className="h-4 w-4" />}
-          label="Avanço da linha (média)"
-          value={avancoValue}
-          detail={`${MES_AVANCO}/${ANO_AVANCO}`}
-        />
+              <div className="flex flex-col">
+                <span className="text-[11px] text-muted-foreground">Mês</span>
+                <select
+                  className="h-9 w-[140px] rounded-md border bg-background px-2 text-sm"
+                  value={fMes}
+                  onChange={(e) => setFMes(e.target.value)}
+                >
+                  {Array.from({ length: 12 }).map((_, i) => {
+                    const m = String(i + 1);
+                    return (
+                      <option key={m} value={m}>
+                        {pad2(i + 1)}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
 
-        <Kpi
-          icon={<Factory className="h-4 w-4" />}
-          label="Materiais faltantes"
-          value={faltantesValue}
-          detail={`${MES_FALTA}/${ANO_FALTA}`}
-          clickable
-          onClick={() => abrirFaltantes()}
-        />
-
-        <Kpi
-          icon={<Award className="h-4 w-4" />}
-          label="Retrabalho (HH)"
-          value={retrValue}
-          detail={MES_ATUAL_LABEL}
-          clickable
-          onClick={() => abrirRetrabalho()}
-        />
-      </div>
-
-      {/* Gráfico de atividades realizadas por colaborador */}
-      <Card className="hover:shadow-lg transition">
-        <CardHeader className="pb-2">
-          <CardTitle>Atividades realizadas por colaborador (ERP)</CardTitle>
-        </CardHeader>
-        <CardContent className="pt-4" style={{ height: 280 }}>
-          {barLoading ? (
-            <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-              Carregando gráfico…
-            </div>
-          ) : barErro ? (
-            <div className="h-full flex items-center justify-center text-sm text-red-600">
-              {barErro}
-            </div>
-          ) : barData.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-              Nenhum apontamento encontrado para o supervisor.
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={barData}
-                margin={{ left: 12, right: 12, top: 8, bottom: 24 }}
-                style={{ cursor: "pointer" }}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="name"
-                  angle={-20}
-                  textAnchor="end"
-                  height={50}
-                  tick={{ fontSize: 10 }}
+              <div className="flex flex-col">
+                <span className="text-[11px] text-muted-foreground">Ano</span>
+                <Input
+                  className="h-9 w-[120px]"
+                  value={fAno}
+                  onChange={(e) => setFAno(e.target.value)}
+                  placeholder="2026"
                 />
-                <YAxis tickFormatter={(v) => `${v}h`} width={40} tick={{ fontSize: 10 }} />
-                <Tooltip
-                  formatter={(value: any) => [`${value} h`, "Horas apontadas"]}
-                  labelFormatter={(label) => `Colaborador: ${label}`}
-                />
-                <Bar
-                  dataKey="hh"
-                  radius={[6, 6, 0, 0]}
-                  onClick={(data: any) => {
-                    const row: BarColab | undefined = data?.payload;
-                    if (!row?.codfunc) return;
-                    carregarDetalhe(row.codfunc, row.name);
-                  }}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </CardContent>
-      </Card>
+              </div>
 
-      {/* Cards auxiliares */}
-      <div className="grid md:grid-cols-2 gap-4">
-        {/* Assiduidade (mock) */}
-        <Card className="hover:shadow-lg transition">
-          <CardHeader className="pb-2">
-            <CardTitle>Assiduidade </CardTitle>
-          </CardHeader>
-          <CardContent className="h-80">
-            <SpeedometerGauge value={assValue} max={100} title="Índice de assiduidade" />
+              <div className="flex items-center gap-2 ml-auto">
+                <Button variant="outline" size="sm" onClick={irParaHoje} className="gap-2">
+                  <RefreshCw className="h-4 w-4" />
+                  Hoje
+                </Button>
+                <Button size="sm" onClick={aplicarFiltros} className="gap-2">
+                  <Gauge className="h-4 w-4" />
+                  Aplicar
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-2 text-[11px] text-muted-foreground">
+              * Avanço / Faltantes / Retrabalho respeitam o mês/ano selecionados. (Atividades e
+              Senioridade ainda estão “geral”.)
+            </div>
           </CardContent>
         </Card>
 
-        {/* Pirâmide de senioridade (Real x Previsto) */}
+        {/* Linha de KPIs */}
+        <div className="grid gap-4 xl:grid-cols-4 md:grid-cols-2">
+          <Kpi
+            icon={<Clock3 className="h-4 w-4" />}
+            label="HE disponível × consumida"
+            value={`${data.he.cons} / ${data.he.disp} h`}
+            detail={MMYYYY_LABEL}
+          />
+
+          <Kpi
+            icon={<Gauge className="h-4 w-4" />}
+            label="Avanço da linha (média)"
+            value={avancoValue}
+            detail={MMYYYY_LABEL}
+          />
+
+          <Kpi
+            icon={<Factory className="h-4 w-4" />}
+            label="Materiais faltantes"
+            value={faltantesValue}
+            detail={MMYYYY_LABEL}
+            clickable
+            onClick={() => abrirFaltantes()}
+          />
+
+          <Kpi
+            icon={<Award className="h-4 w-4" />}
+            label="Retrabalho (HH)"
+            value={retrValue}
+            detail={MMYYYY_LABEL}
+            clickable
+            onClick={() => abrirRetrabalho()}
+          />
+        </div>
+
+        {/* Gráfico de atividades realizadas por colaborador */}
         <Card className="hover:shadow-lg transition">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
-            <div>
-              <CardTitle>Pirâmide de senioridade (Real × Previsto)</CardTitle>
-              <div className="mt-1 text-xs text-muted-foreground">
-                Dep.: {CODDEP_ALVO} • Supervisor: {CODUSU_LOGADO}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Atual: {fmtInt(seniorResumo.totalAtual)}</Badge>
-              <Badge variant="secondary">Previsto: {fmtInt(seniorResumo.totalPrev)}</Badge>
-              <Badge
-                variant={seniorResumo.diff >= 0 ? "default" : "destructive"}
-                className="whitespace-nowrap"
-              >
-                {seniorResumo.diff >= 0 ? "Excedente" : "Faltam"}{" "}
-                {fmtInt(Math.abs(seniorResumo.diff))} • {fmtPct(seniorResumo.pct)}
-              </Badge>
-            </div>
+          <CardHeader className="pb-2">
+            <CardTitle>Atividades realizadas por colaborador (ERP)</CardTitle>
           </CardHeader>
-
-          <CardContent className="pt-2" style={{ height: 220 }}>
-            {seniorLoading ? (
+          <CardContent className="pt-4" style={{ height: 280 }}>
+            {barLoading ? (
               <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                Carregando pirâmide…
+                Carregando gráfico…
               </div>
-            ) : seniorErro ? (
+            ) : barErro ? (
               <div className="h-full flex items-center justify-center text-sm text-red-600">
-                {seniorErro}
+                {barErro}
               </div>
-            ) : seniorData.length === 0 ? (
+            ) : barData.length === 0 ? (
               <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                Nenhum colaborador ativo para o filtro atual.
+                Nenhum apontamento encontrado para o supervisor.
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
-                  data={seniorData}
-                  layout="vertical"
-                  margin={{ top: 8, bottom: 8, left: 12, right: 12 }}
-                  barCategoryGap={10}
+                  data={barData}
+                  margin={{ left: 12, right: 12, top: 8, bottom: 24 }}
+                  style={{ cursor: "pointer" }}
                 >
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 10 }} />
-                  <YAxis type="category" dataKey="label" width={80} tick={{ fontSize: 11 }} />
-                  <Legend />
-                  <Tooltip
-                    formatter={(value: any, name: any) => {
-                      if (name === "previsto") return [value, "Previsto"];
-                      if (name === "atual") return [value, "Atual"];
-                      return [value, name];
-                    }}
-                    labelFormatter={(label) => `Nível: ${label}`}
-                    contentStyle={{ fontSize: 12 }}
-                    wrapperStyle={{ outline: "none" }}
+                  <XAxis
+                    dataKey="name"
+                    angle={-20}
+                    textAnchor="end"
+                    height={50}
+                    tick={{ fontSize: 10 }}
                   />
-                  <Bar dataKey="previsto" name="Previsto" radius={[0, 6, 6, 0]} />
-                  <Bar dataKey="atual" name="Atual" radius={[0, 6, 6, 0]} />
+                  <YAxis tickFormatter={(v) => `${v}h`} width={40} tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    formatter={(value: any) => [`${value} h`, "Horas apontadas"]}
+                    labelFormatter={(label) => `Colaborador: ${label}`}
+                  />
+                  <Bar
+                    dataKey="hh"
+                    radius={[6, 6, 0, 0]}
+                    onClick={(data: any) => {
+                      const row: BarColab | undefined = data?.payload;
+                      if (!row?.codfunc) return;
+                      carregarDetalhe(row.codfunc, row.name);
+                    }}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             )}
           </CardContent>
-
-          {!seniorLoading && !seniorErro && seniorData.length > 0 ? (
-            <div className="px-6 pb-4 pt-0 grid grid-cols-3 gap-3 text-xs">
-              {seniorData.map((x) => (
-                <div
-                  key={x.nivel}
-                  className="rounded-md border p-2 flex items-center justify-between"
-                >
-                  <div className="font-medium">{x.label}</div>
-                  <div className="text-right">
-                    <div className="text-muted-foreground">
-                      Atual {fmtInt(x.atual)} • Prev {fmtInt(x.previsto)}
-                    </div>
-                    <div className={x.diff >= 0 ? "text-foreground" : "text-red-600"}>
-                      {x.diff >= 0 ? "+" : "-"}
-                      {fmtInt(Math.abs(x.diff))} • {fmtPct(x.pct)}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
         </Card>
+
+        {/* Cards auxiliares */}
+        <div className="grid md:grid-cols-2 gap-4">
+          <Card className="hover:shadow-lg transition">
+            <CardHeader className="pb-2">
+              <CardTitle>Assiduidade</CardTitle>
+            </CardHeader>
+            <CardContent className="h-80">
+              <SpeedometerGauge value={assValue} max={100} title="Índice de assiduidade" />
+            </CardContent>
+          </Card>
+
+          <Card className="hover:shadow-lg transition">
+            <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
+              <div>
+                <CardTitle>Pirâmide de senioridade (Real × Previsto)</CardTitle>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Dep.: {CODDEP_ALVO} • Supervisor: {CODUSU_LOGADO}
+                </div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  * Clique em um nível para ver os colaboradores
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">Atual: {fmtInt(seniorResumo.totalAtual)}</Badge>
+                <Badge variant="secondary">Previsto: {fmtInt(seniorResumo.totalPrev)}</Badge>
+                <Badge
+                  variant={seniorResumo.diff >= 0 ? "default" : "destructive"}
+                  className="whitespace-nowrap"
+                >
+                  {seniorResumo.diff >= 0 ? "Excedente" : "Faltam"}{" "}
+                  {fmtInt(Math.abs(seniorResumo.diff))} • {fmtPct(seniorResumo.pct)}
+                </Badge>
+              </div>
+            </CardHeader>
+
+            <CardContent className="pt-2" style={{ height: 220 }}>
+              {seniorLoading ? (
+                <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                  Carregando pirâmide…
+                </div>
+              ) : seniorErro ? (
+                <div className="h-full flex items-center justify-center text-sm text-red-600">
+                  {seniorErro}
+                </div>
+              ) : seniorData.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                  Nenhum colaborador ativo para o filtro atual.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={seniorData}
+                    layout="vertical"
+                    margin={{ top: 8, bottom: 8, left: 12, right: 12 }}
+                    barCategoryGap={10}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis type="number" allowDecimals={false} tick={{ fontSize: 10 }} />
+                    <YAxis type="category" dataKey="label" width={80} tick={{ fontSize: 11 }} />
+                    <Legend />
+                    <Tooltip
+                      formatter={(value: any, name: any, ctx: any) => {
+                        const nivel = ctx?.payload?.nivel as "I" | "II" | "III" | undefined;
+                        const nLabel = nivel ? nivelLabel(nivel) : "";
+                        if (name === "previsto") return [value, `Previsto • ${nLabel}`];
+                        if (name === "atual") return [value, `Atual • ${nLabel}`];
+                        return [value, name];
+                      }}
+                      labelFormatter={(label) => `Nível: ${label}`}
+                      contentStyle={{ fontSize: 12 }}
+                      wrapperStyle={{ outline: "none" }}
+                    />
+
+                    {/* Clique em qualquer barra (previsto/atual) abre modal do nível */}
+                    <Bar
+                      dataKey="previsto"
+                      name="Previsto"
+                      radius={[0, 6, 6, 0]}
+                      style={{ cursor: "pointer" }}
+                      onClick={(data: any) => {
+                        const nivel = data?.payload?.nivel as "I" | "II" | "III" | undefined;
+                        if (!nivel) return;
+                        abrirColaboradoresNivel(nivel);
+                      }}
+                    />
+                    <Bar
+                      dataKey="atual"
+                      name="Atual"
+                      radius={[0, 6, 6, 0]}
+                      style={{ cursor: "pointer" }}
+                      onClick={(data: any) => {
+                        const nivel = data?.payload?.nivel as "I" | "II" | "III" | undefined;
+                        if (!nivel) return;
+                        abrirColaboradoresNivel(nivel);
+                      }}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+
+            {!seniorLoading && !seniorErro && seniorData.length > 0 ? (
+              <div className="px-6 pb-4 pt-0 grid grid-cols-3 gap-3 text-xs">
+                {seniorData.map((x) => (
+                  <button
+                    key={x.nivel}
+                    className="rounded-md border p-2 flex items-center justify-between hover:bg-muted/40 transition text-left"
+                    onClick={() => abrirColaboradoresNivel(x.nivel)}
+                    type="button"
+                  >
+                    <div className="font-medium">{x.label}</div>
+                    <div className="text-right">
+                      <div className="text-muted-foreground">
+                        Atual {fmtInt(x.atual)} • Prev {fmtInt(x.previsto)}
+                      </div>
+                      <div className={x.diff >= 0 ? "text-foreground" : "text-red-600"}>
+                        {x.diff >= 0 ? "+" : "-"}
+                        {fmtInt(Math.abs(x.diff))} • {fmtPct(x.pct)}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </Card>
+        </div>
+
+        {/* ===== Modal: Detalhamento de atividades ===== */}
+        <Dialog open={detOpen} onOpenChange={setDetOpen}>
+          <DialogContent className="max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>Detalhamento de atividades</DialogTitle>
+              <DialogDescription>
+                {detColab ? (
+                  <span>
+                    Colaborador: <b>{detColab.name}</b> • CODFUNC: {detColab.codfunc}
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="rounded-md border">
+              <div className="px-4 py-3 border-b text-sm flex items-center justify-between gap-3">
+                <div className="text-black/70">
+                  {detLoading
+                    ? "Carregando atividades…"
+                    : detErro
+                    ? "Erro ao carregar"
+                    : `${detRows.length} atividade(s) encontrada(s)`}
+                </div>
+
+                {!detLoading && !detErro ? (
+                  <Badge variant="secondary">Total HH: {Math.round(totalDetHH * 10) / 10}</Badge>
+                ) : null}
+              </div>
+
+              <ScrollArea className="h-[420px]">
+                {detLoading ? (
+                  <div className="p-6 text-sm text-black/70">Carregando…</div>
+                ) : detErro ? (
+                  <div className="p-6 text-sm text-red-600">{detErro}</div>
+                ) : detRows.length === 0 ? (
+                  <div className="p-6 text-sm text-black/70">
+                    Nenhuma atividade encontrada para este colaborador.
+                  </div>
+                ) : (
+                  <div className="w-full">
+                    <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs font-medium text-black/70 border-b">
+                      <div className="col-span-7">Atividade</div>
+                      <div className="col-span-3">Data execução</div>
+                      <div className="col-span-2 text-right">HH</div>
+                    </div>
+
+                    {detRows.map((r, idx) => (
+                      <div
+                        key={idx}
+                        className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b last:border-b-0"
+                      >
+                        <div className="col-span-7">{r.descrprod}</div>
+                        <div className="col-span-3 text-black/70">{r.dtexecucao}</div>
+                        <div className="col-span-2 text-right">
+                          {Math.round((Number(r.hh) || 0) * 10) / 10}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* ===== Modal: Materiais faltantes ===== */}
+        <Dialog open={faltOpen} onOpenChange={setFaltOpen}>
+          <DialogContent className="max-w-6xl">
+            <DialogHeader>
+              <DialogTitle>Materiais faltantes</DialogTitle>
+              <DialogDescription>
+                Supervisor: <b>{CODUSU_LOGADO}</b> • Período: {MMYYYY_LABEL} •{" "}
+                {faltListLoading ? "Carregando…" : `${faltRows.length} item(ns)`}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="rounded-md border">
+              <div className="px-4 py-3 border-b text-sm flex items-center justify-between gap-3">
+                <div className="text-black/70">
+                  {faltListLoading
+                    ? "Carregando lista…"
+                    : faltListErro
+                    ? "Erro ao carregar"
+                    : "Clique em recarregar (se necessário)."}
+                </div>
+
+                {!faltListLoading && !faltListErro ? (
+                  <Badge variant="secondary">Total: {faltRows.length}</Badge>
+                ) : null}
+              </div>
+
+              <ScrollArea className="h-[520px]">
+                {faltListLoading ? (
+                  <div className="p-6 text-sm text-black/70">Carregando…</div>
+                ) : faltListErro ? (
+                  <div className="p-6 text-sm text-red-600">{faltListErro}</div>
+                ) : faltRows.length === 0 ? (
+                  <div className="p-6 text-sm text-black/70">
+                    Nenhum material faltante encontrado para o filtro atual.
+                  </div>
+                ) : (
+                  <div className="w-full">
+                    <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs font-medium text-black/70 border-b">
+                      <div className="col-span-2">Chassi</div>
+                      <div className="col-span-2">Cód. Prod</div>
+                      <div className="col-span-5">Descrição</div>
+                      <div className="col-span-2">Necessidade</div>
+                      <div className="col-span-1 text-right">Entrega</div>
+                    </div>
+
+                    {faltRows.map((r, idx) => (
+                      <div
+                        key={`${r.chassi}-${r.codprod}-${idx}`}
+                        className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b last:border-b-0"
+                      >
+                        <div className="col-span-2">{r.chassi}</div>
+                        <div className="col-span-2">{r.codprod}</div>
+                        <div className="col-span-5">{r.descrprod}</div>
+                        <div className="col-span-2 text-black/70">{r.necessidade}</div>
+                        <div className="col-span-1 text-right text-black/70">{r.dataEntrega}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                className="text-sm underline text-black/80 hover:text-black"
+                onClick={() => {
+                  setFaltRows([]);
+                  abrirFaltantes();
+                }}
+              >
+                Recarregar lista
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* ===== Modal: Retrabalho ===== */}
+        <Dialog open={retrOpen} onOpenChange={setRetrOpen}>
+          <DialogContent className="max-w-6xl">
+            <DialogHeader>
+              <DialogTitle>Retrabalho — Detalhamento</DialogTitle>
+              <DialogDescription>
+                Supervisor: <b>{CODUSU_LOGADO}</b> • Período: {MMYYYY_LABEL} •{" "}
+                {retrListLoading ? "Carregando…" : `${retrRows.length} item(ns)`}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="rounded-md border">
+              <div className="px-4 py-3 border-b text-sm flex items-center justify-between gap-3">
+                <div className="text-black/70">
+                  {retrListLoading
+                    ? "Carregando detalhamento…"
+                    : retrListErro
+                    ? "Erro ao carregar"
+                    : "Clique em recarregar (se necessário)."}
+                </div>
+
+                {!retrListLoading && !retrListErro ? (
+                  <Badge variant="secondary">
+                    Total HH: {Math.round(retrTotalModal * 10) / 10}
+                  </Badge>
+                ) : null}
+              </div>
+
+              <ScrollArea className="h-[520px]">
+                {retrListLoading ? (
+                  <div className="p-6 text-sm text-black/70">Carregando…</div>
+                ) : retrListErro ? (
+                  <div className="p-6 text-sm text-red-600">{retrListErro}</div>
+                ) : retrRows.length === 0 ? (
+                  <div className="p-6 text-sm text-black/70">
+                    Nenhum retrabalho encontrado para o mês/ano selecionado.
+                  </div>
+                ) : (
+                  <div className="w-full">
+                    <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs font-medium text-black/70 border-b">
+                      <div className="col-span-3">Setor</div>
+                      <div className="col-span-7">Atividade</div>
+                      <div className="col-span-2 text-right">HH</div>
+                    </div>
+
+                    {retrRows.map((r, idx) => (
+                      <div
+                        key={`${r.setor}-${r.atividade}-${idx}`}
+                        className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b last:border-b-0"
+                      >
+                        <div className="col-span-3">{r.setor}</div>
+                        <div className="col-span-7">{r.atividade}</div>
+                        <div className="col-span-2 text-right text-black/70">
+                          {Math.round((Number(r.hh) || 0) * 10) / 10}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                className="text-sm underline text-black/80 hover:text-black"
+                onClick={() => {
+                  setRetrRows([]);
+                  abrirRetrabalho();
+                }}
+              >
+                Recarregar detalhamento
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* ===== Modal: Colaboradores do nível (I/II/III) ===== */}
+        <Dialog
+          open={seniorNivelOpen}
+          onOpenChange={(open) => {
+            setSeniorNivelOpen(open);
+            if (!open) {
+              setSeniorNivelErro(null);
+              // se quiser manter cache, não limpe:
+              // setSeniorNivelRows([]);
+              // setSeniorNivelSel(null);
+            }
+          }}
+        >
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Users className="h-5 w-5" />
+                Colaboradores por nível
+              </DialogTitle>
+              <DialogDescription>
+                Supervisor: <b>{CODUSU_LOGADO}</b> • Nível:{" "}
+                <b>{seniorNivelSel ? nivelLabel(seniorNivelSel) : "—"}</b> •{" "}
+                {seniorNivelLoading ? "Carregando…" : `${seniorNivelRows.length} colaborador(es)`}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="rounded-md border">
+              <div className="px-4 py-3 border-b text-sm flex items-center justify-between gap-3">
+                <div className="text-muted-foreground">
+                  {seniorNivelLoading
+                    ? "Carregando lista…"
+                    : seniorNivelErro
+                    ? "Erro ao carregar"
+                    : "Clique no nível novamente para recarregar, se necessário."}
+                </div>
+
+                {!seniorNivelLoading && !seniorNivelErro ? (
+                  <Badge variant="secondary">Total: {seniorNivelRows.length}</Badge>
+                ) : null}
+              </div>
+
+              <ScrollArea className="h-[520px]">
+                {seniorNivelLoading ? (
+                  <div className="p-6 text-sm text-muted-foreground">Carregando…</div>
+                ) : seniorNivelErro ? (
+                  <div className="p-6 text-sm text-red-600">{seniorNivelErro}</div>
+                ) : seniorNivelRows.length === 0 ? (
+                  <div className="p-6 text-sm text-muted-foreground">
+                    Nenhum colaborador encontrado para o nível selecionado.
+                  </div>
+                ) : (
+                  <div className="w-full">
+                    <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs font-medium text-muted-foreground border-b">
+                      <div className="col-span-3">CODFUNC</div>
+                      <div className="col-span-7">Nome</div>
+                      <div className="col-span-2 text-right">Nível</div>
+                    </div>
+
+                    {seniorNivelRows.map((r, idx) => (
+                      <div
+                        key={`${r.codfunc}-${idx}`}
+                        className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b last:border-b-0"
+                      >
+                        <div className="col-span-3">{r.codfunc}</div>
+                        <div className="col-span-7">{r.nomefunc}</div>
+                        <div className="col-span-2 text-right text-muted-foreground">{r.nivel}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </ScrollArea>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                className="text-sm underline text-black/80 hover:text-black"
+                onClick={() => {
+                  if (!seniorNivelSel) return;
+                  abrirColaboradoresNivel(seniorNivelSel);
+                }}
+              >
+                Recarregar lista
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
-
-      {/* ===== Modal: Detalhamento de atividades do colaborador clicado ===== */}
-      <Dialog open={detOpen} onOpenChange={setDetOpen}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>Detalhamento de atividades</DialogTitle>
-            <DialogDescription>
-              {detColab ? (
-                <span>
-                  Colaborador: <b>{detColab.name}</b> • CODFUNC: {detColab.codfunc}
-                </span>
-              ) : (
-                "—"
-              )}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="rounded-md border">
-            <div className="px-4 py-3 border-b text-sm flex items-center justify-between gap-3">
-              <div className="text-black/70">
-                {detLoading
-                  ? "Carregando atividades…"
-                  : detErro
-                  ? "Erro ao carregar"
-                  : `${detRows.length} atividade(s) encontrada(s)`}
-              </div>
-
-              {!detLoading && !detErro ? (
-                <Badge variant="secondary">Total HH: {totalDetHH}</Badge>
-              ) : null}
-            </div>
-
-            <ScrollArea className="h-[420px]">
-              {detLoading ? (
-                <div className="p-6 text-sm text-black/70">Carregando…</div>
-              ) : detErro ? (
-                <div className="p-6 text-sm text-red-600">{detErro}</div>
-              ) : detRows.length === 0 ? (
-                <div className="p-6 text-sm text-black/70">
-                  Nenhuma atividade encontrada para este colaborador.
-                </div>
-              ) : (
-                <div className="w-full">
-                  <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs font-medium text-black/70 border-b">
-                    <div className="col-span-7">Atividade</div>
-                    <div className="col-span-3">Data execução</div>
-                    <div className="col-span-2 text-right">HH</div>
-                  </div>
-
-                  {detRows.map((r, idx) => (
-                    <div
-                      key={idx}
-                      className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b last:border-b-0"
-                    >
-                      <div className="col-span-7">{r.descrprod}</div>
-                      <div className="col-span-3 text-black/70">{r.dtexecucao}</div>
-                      <div className="col-span-2 text-right">
-                        {Math.round((Number(r.hh) || 0) * 10) / 10}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </ScrollArea>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* ===== Modal: Lista de materiais faltantes ===== */}
-      <Dialog open={faltOpen} onOpenChange={setFaltOpen}>
-        <DialogContent className="max-w-6xl">
-          <DialogHeader>
-            <DialogTitle>Materiais faltantes</DialogTitle>
-            <DialogDescription>
-              Supervisor: <b>{CODUSU_LOGADO}</b> • Período: {MES_FALTA}/{ANO_FALTA} •{" "}
-              {faltListLoading ? "Carregando…" : `${faltRows.length} item(ns)`}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="rounded-md border">
-            <div className="px-4 py-3 border-b text-sm flex items-center justify-between gap-3">
-              <div className="text-black/70">
-                {faltListLoading
-                  ? "Carregando lista…"
-                  : faltListErro
-                  ? "Erro ao carregar"
-                  : "Clique no KPI para recarregar (se necessário)."}
-              </div>
-
-              {!faltListLoading && !faltListErro ? (
-                <Badge variant="secondary">Total: {faltRows.length}</Badge>
-              ) : null}
-            </div>
-
-            <ScrollArea className="h-[520px]">
-              {faltListLoading ? (
-                <div className="p-6 text-sm text-black/70">Carregando…</div>
-              ) : faltListErro ? (
-                <div className="p-6 text-sm text-red-600">{faltListErro}</div>
-              ) : faltRows.length === 0 ? (
-                <div className="p-6 text-sm text-black/70">
-                  Nenhum material faltante encontrado para o filtro atual.
-                </div>
-              ) : (
-                <div className="w-full">
-                  <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs font-medium text-black/70 border-b">
-                    <div className="col-span-2">Chassi</div>
-                    <div className="col-span-2">Cód. Prod</div>
-                    <div className="col-span-5">Descrição</div>
-                    <div className="col-span-2">Necessidade</div>
-                    <div className="col-span-1 text-right">Entrega</div>
-                  </div>
-
-                  {faltRows.map((r, idx) => (
-                    <div
-                      key={`${r.chassi}-${r.codprod}-${idx}`}
-                      className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b last:border-b-0"
-                    >
-                      <div className="col-span-2">{r.chassi}</div>
-                      <div className="col-span-2">{r.codprod}</div>
-                      <div className="col-span-5">{r.descrprod}</div>
-                      <div className="col-span-2 text-black/70">{r.necessidade}</div>
-                      <div className="col-span-1 text-right text-black/70">
-                        {r.dataEntrega}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </ScrollArea>
-          </div>
-
-          <div className="flex justify-end">
-            <button
-              className="text-sm underline text-black/80 hover:text-black"
-              onClick={() => {
-                setFaltRows([]);
-                abrirFaltantes();
-              }}
-            >
-              Recarregar lista
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* ===== Modal: Detalhamento do retrabalho ===== */}
-      <Dialog open={retrOpen} onOpenChange={setRetrOpen}>
-        <DialogContent className="max-w-6xl">
-          <DialogHeader>
-            <DialogTitle>Retrabalho — Detalhamento</DialogTitle>
-            <DialogDescription>
-              Supervisor: <b>{CODUSU_LOGADO}</b> • Período: {MES_ATUAL_LABEL} •{" "}
-              {retrListLoading ? "Carregando…" : `${retrRows.length} item(ns)`}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="rounded-md border">
-            <div className="px-4 py-3 border-b text-sm flex items-center justify-between gap-3">
-              <div className="text-black/70">
-                {retrListLoading
-                  ? "Carregando detalhamento…"
-                  : retrListErro
-                  ? "Erro ao carregar"
-                  : "Clique no KPI para recarregar (se necessário)."}
-              </div>
-
-              {!retrListLoading && !retrListErro ? (
-                <Badge variant="secondary">Total HH: {retrTotalModal}</Badge>
-              ) : null}
-            </div>
-
-            <ScrollArea className="h-[520px]">
-              {retrListLoading ? (
-                <div className="p-6 text-sm text-black/70">Carregando…</div>
-              ) : retrListErro ? (
-                <div className="p-6 text-sm text-red-600">{retrListErro}</div>
-              ) : retrRows.length === 0 ? (
-                <div className="p-6 text-sm text-black/70">
-                  Nenhum retrabalho encontrado para o mês atual.
-                </div>
-              ) : (
-                <div className="w-full">
-                  <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs font-medium text-black/70 border-b">
-                    <div className="col-span-3">Setor</div>
-                    <div className="col-span-7">Atividade</div>
-                    <div className="col-span-2 text-right">HH</div>
-                  </div>
-
-                  {retrRows.map((r, idx) => (
-                    <div
-                      key={`${r.setor}-${r.atividade}-${idx}`}
-                      className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b last:border-b-0"
-                    >
-                      <div className="col-span-3">{r.setor}</div>
-                      <div className="col-span-7">{r.atividade}</div>
-                      <div className="col-span-2 text-right text-black/70">
-                        {Math.round((Number(r.hh) || 0) * 10) / 10}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </ScrollArea>
-          </div>
-
-          <div className="flex justify-end">
-            <button
-              className="text-sm underline text-black/80 hover:text-black"
-              onClick={() => {
-                setRetrRows([]);
-                abrirRetrabalho();
-              }}
-            >
-              Recarregar detalhamento
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
