@@ -2,7 +2,7 @@
 import React from "react";
 import type { PropsWithChildren } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { Home, Users, ClipboardList, PackageSearch, CalendarDays, KanbanSquare } from "lucide-react";
+import { Home, Users, ClipboardList, PackageSearch, CalendarDays, KanbanSquare, Grid3x3 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/auth/AuthProvider";
@@ -76,6 +76,7 @@ export const Layout: React.FC<PropsWithChildren> = ({ children }) => {
             <div className="space-y-1">
               <Item to="/dashboard" icon={<Home className="h-4 w-4" />} label="Dashboard" />
               <Item to="/equipe" icon={<Users className="h-4 w-4" />} label="Equipe" />
+              <Item to="/piramide" icon={<Grid3x3 className="h-4 w-4" />} label="Pirâmide de Competências" />
               <Item to="/atividades" icon={<ClipboardList className="h-4 w-4" />} label="Atividades / OP" />
               <Item to="/materiais" icon={<PackageSearch className="h-4 w-4" />} label="Materiais" />
               <Item to="/calendario" icon={<CalendarDays className="h-4 w-4" />} label="Calendário" />

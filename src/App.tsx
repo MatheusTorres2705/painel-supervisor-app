@@ -5,6 +5,8 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
 import EquipePage from "@/pages/EquipePage";
+import PiramidePage from "@/pages/PiramidePage";
+
 // import AtividadesPage from "@/pages/AtividadesPage";
 // import AlocacaoPage from "@/pages/AlocacaoPage";
 // import MateriaisPage from "@/pages/MateriaisPage";
@@ -100,6 +102,19 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/piramide" 
+          element={
+              <ProtectedRoute>
+                <Layout>
+                  <PiramidePage />
+                  
+                </Layout>
+              </ProtectedRoute>
+            }
+          
+          // element={<PiramidePage />} 
+          />
+
            <Route
             path="/hora-extra"
             element={

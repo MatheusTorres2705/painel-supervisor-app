@@ -52,14 +52,18 @@ import {
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
 type TabKey =
   | "metas"
   | "combinados"
   | "funcoes"
   | "pdi"
   | "checkin"
-  | "anotacoes"
-  | "ocorrencias"; // ✅ NOVA ABA
+  | "ocorrencias"
+  | "anotacoes";
 
 type MembroBasico = {
   codfunc: number;
@@ -93,7 +97,7 @@ interface LocationState {
   membro?: MembroBasico;
 }
 
-/** ===================== OCORRÊNCIAS (FRONT ONLY) ===================== */
+/* ===================== OCORRÊNCIAS (FRONT ONLY) ===================== */
 type OcorrenciaTipo = "Advertência" | "Ajuste de ponto" | "Atestado" | "Outros";
 
 type OcorrenciaItem = {
@@ -110,47 +114,10 @@ type OcorrenciaItem = {
   createdAt: string; // ISO
 };
 
-function uid() {
-  return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
+/* =========================================================
+   HELPERS
+========================================================= */
 
-function storageKeyOcorrencias(codfunc: number) {
-  return `nx:func:${codfunc}:ocorrencias:v1`;
-}
-
-function safeParseJSON<T>(s: string | null, fallback: T): T {
-  try {
-    if (!s) return fallback;
-    return JSON.parse(s) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function fmtBytes(bytes: number) {
-  const n = Number(bytes || 0);
-  if (!Number.isFinite(n) || n <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let idx = 0;
-  let val = n;
-  while (val >= 1024 && idx < units.length - 1) {
-    val = val / 1024;
-    idx++;
-  }
-  const out = idx === 0 ? `${Math.round(val)}` : `${Math.round(val * 10) / 10}`;
-  return `${out} ${units[idx]}`;
-}
-
-function brDate(ymd: string) {
-  // "2026-01-19" -> "19/01/2026"
-  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd || "-";
-  const [y, m, d] = ymd.split("-");
-  return `${d}/${m}/${y}`;
-}
-
-/**
- * URL da foto a partir do CODFUNC
- */
 const fotoUrl = (codfunc: number) =>
   `http://sankhya.nxboats.com.br:8180/mge/Funcionario@IMAGEM@CODEMP=1@CODFUNC=${codfunc}.dbimage`;
 
@@ -167,7 +134,6 @@ function notaLabel(n: number) {
   return found?.label ?? `${n}`;
 }
 
-/** ========= Recharts: quebra de linha ========= */
 function wrapWordsToLines(text: string, maxCharsPerLine: number) {
   const words = String(text || "")
     .split(/\s+/)
@@ -182,9 +148,8 @@ function wrapWordsToLines(text: string, maxCharsPerLine: number) {
     } else {
       if (line) lines.push(line);
       if (w.length > maxCharsPerLine) {
-        const chunks = w.match(new RegExp(`.{1,${maxCharsPerLine}}`, "g")) || [
-          w,
-        ];
+        const chunks =
+          w.match(new RegExp(`.{1,${maxCharsPerLine}}`, "g")) || [w];
         lines.push(...chunks.slice(0, -1));
         line = chunks[chunks.length - 1] || "";
       } else {
@@ -196,31 +161,6 @@ function wrapWordsToLines(text: string, maxCharsPerLine: number) {
   return lines;
 }
 
-const WrappedXAxisTick = (props: any) => {
-  const { x, y, payload } = props;
-  const value = String(payload?.value ?? "");
-  const lines = wrapWordsToLines(value, 14);
-
-  return (
-    <g transform={`translate(${x},${y})`}>
-      <text
-        x={0}
-        y={0}
-        dy={10}
-        textAnchor="middle"
-        fontSize={10}
-        fill="currentColor"
-      >
-        {lines.slice(0, 3).map((ln, i) => (
-          <tspan key={i} x={0} dy={i === 0 ? 0 : 12}>
-            {ln}
-          </tspan>
-        ))}
-      </text>
-    </g>
-  );
-};
-
 /** ✅ tick para YAxis (gráfico horizontal, mais legível) */
 const WrappedYAxisTick = (props: any) => {
   const { x, y, payload } = props;
@@ -229,15 +169,8 @@ const WrappedYAxisTick = (props: any) => {
 
   return (
     <g transform={`translate(${x},${y})`}>
-      <text
-        x={0}
-        y={0}
-        dy={4}
-        textAnchor="end"
-        fontSize={11}
-        fill="currentColor"
-      >
-        {lines.slice(0, 2).map((ln, i) => (
+      <text x={0} y={0} dy={4} textAnchor="end" fontSize={11} fill="currentColor">
+        {lines.slice(0, 2).map((ln: string, i: number) => (
           <tspan key={i} x={0} dy={i === 0 ? 0 : 12}>
             {ln}
           </tspan>
@@ -275,11 +208,480 @@ function toneFromPercent(pct: number) {
   };
 }
 
+function uid() {
+  return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function storageKeyOcorrencias(codfunc: number) {
+  return `nx:func:${codfunc}:ocorrencias:v1`;
+}
+
+function safeParseJSON<T>(s: string | null, fallback: T): T {
+  try {
+    if (!s) return fallback;
+    return JSON.parse(s) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function fmtBytes(bytes: number) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let idx = 0;
+  let val = n;
+  while (val >= 1024 && idx < units.length - 1) {
+    val = val / 1024;
+    idx++;
+  }
+  const out = idx === 0 ? `${Math.round(val)}` : `${Math.round(val * 10) / 10}`;
+  return `${out} ${units[idx]}`;
+}
+
+function brDate(ymd: string) {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd || "-";
+  const [y, m, d] = ymd.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function todayYMD() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+/* =========================================================
+   COMPONENTS (inline – fácil de manter agora)
+========================================================= */
+
+function PageHeader({
+  tab,
+  membro,
+  currentTabConfig,
+  onCheckinAtualizar,
+  onCheckinPdf,
+  onCheckinNovo,
+  onOccAtualizar,
+  onOccNovo,
+  avalLoading,
+  avalLen,
+  occLoading,
+}: {
+  tab: TabKey;
+  membro: MembroBasico | null;
+  currentTabConfig: { key: TabKey; label: string; icon: any };
+  onCheckinAtualizar: () => void;
+  onCheckinPdf: () => void;
+  onCheckinNovo: () => void;
+  onOccAtualizar: () => void;
+  onOccNovo: () => void;
+  avalLoading: boolean;
+  avalLen: number;
+  occLoading: boolean;
+}) {
+  return (
+    <div className="px-5 pt-4 pb-3 flex items-center justify-between border-b">
+      <div className="flex flex-col gap-1">
+        <div className="inline-flex items-center gap-2">
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-foreground text-background">
+            <currentTabConfig.icon className="h-4 w-4" />
+          </span>
+          <h1 className="text-base font-semibold">
+            {tab === "metas" && "Metas do colaborador"}
+            {tab === "combinados" && "Combinados"}
+            {tab === "funcoes" && "Funções / Papéis"}
+            {tab === "pdi" && "Plano de Desenvolvimento Individual"}
+            {tab === "checkin" && "Avaliação comportamental"}
+            {tab === "ocorrencias" && "Ocorrências"}
+            {tab === "anotacoes" && "Anotações"}
+          </h1>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          {membro?.nome ? `Você está visualizando ${membro.nome}.` : ""}
+        </p>
+      </div>
+
+      {tab === "checkin" ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={onCheckinAtualizar}
+            disabled={avalLoading}
+          >
+            <RefreshCw className="h-4 w-4" />
+            Atualizar
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={onCheckinPdf}
+            disabled={avalLoading || !avalLen}
+          >
+            <FileDown className="h-4 w-4" />
+            Imprimir PDF
+          </Button>
+
+          <Button size="sm" className="gap-2" onClick={onCheckinNovo}>
+            <Plus className="h-4 w-4" />
+            Nova avaliação
+          </Button>
+        </div>
+      ) : tab === "ocorrencias" ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={onOccAtualizar}
+            disabled={occLoading}
+          >
+            <RefreshCw className="h-4 w-4" />
+            Atualizar
+          </Button>
+
+          <Button size="sm" className="gap-2" onClick={onOccNovo}>
+            <Plus className="h-4 w-4" />
+            Nova ocorrência
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function NovaAvaliacaoDialog({
+  open,
+  onOpenChange,
+  checkinAno,
+  criterios,
+  criteriosLoading,
+  criteriosErro,
+  notas,
+  setNotas,
+  onCancelar,
+  onSalvar,
+  salvando,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  checkinAno: string;
+  criterios: Criterio[];
+  criteriosLoading: boolean;
+  criteriosErro: string | null;
+  notas: Record<number, number>;
+  setNotas: React.Dispatch<React.SetStateAction<Record<number, number>>>;
+  onCancelar: () => void;
+  onSalvar: () => void;
+  salvando: boolean;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" />
+
+        <Dialog.Content
+          className="
+            fixed left-1/2 top-1/2 z-[60]
+            w-[92vw] max-w-[980px]
+            -translate-x-1/2 -translate-y-1/2
+            rounded-2xl bg-white text-slate-900
+            opacity-100 border border-slate-200
+            p-4 shadow-2xl outline-none
+            max-h-[90vh] overflow-y-auto
+          "
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+            <div>
+              <Dialog.Title className="text-base font-semibold">
+                Nova avaliação comportamental
+              </Dialog.Title>
+              <Dialog.Description className="text-xs text-slate-600">
+                Selecione uma nota de <strong>1 a 5</strong> para cada critério •
+                DTREF = <strong>{checkinAno}</strong>
+              </Dialog.Description>
+            </div>
+
+            <Dialog.Close asChild>
+              <Button variant="ghost" size="icon" aria-label="Fechar">
+                <X className="h-4 w-4" />
+              </Button>
+            </Dialog.Close>
+          </div>
+
+          <div className="mt-4">
+            {criteriosLoading ? (
+              <div className="py-6 text-sm text-slate-600">
+                Carregando critérios…
+              </div>
+            ) : criteriosErro ? (
+              <div className="py-6 text-sm text-red-600">{criteriosErro}</div>
+            ) : !criterios.length ? (
+              <div className="py-6 text-sm text-slate-600">Nenhum critério.</div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {criterios.map((c) => {
+                  const v = notas[c.cod] ?? "";
+                  return (
+                    <div
+                      key={c.cod}
+                      className="rounded-xl border border-slate-200 bg-white p-3"
+                    >
+                      <p className="text-sm font-semibold whitespace-normal break-words">
+                        {c.cod} - {c.descr}
+                      </p>
+
+                      <select
+                        className="
+                          mt-3 w-full rounded-md
+                          border border-slate-200
+                          bg-white text-slate-900
+                          px-3 py-2 text-xs
+                          focus:outline-none focus:ring-2 focus:ring-slate-300
+                        "
+                        value={v}
+                        onChange={(e) => {
+                          const val = e.target.value ? Number(e.target.value) : 0;
+                          setNotas((prev) => {
+                            const next = { ...prev };
+                            if (!val) delete next[c.cod];
+                            else next[c.cod] = val;
+                            return next;
+                          });
+                        }}
+                      >
+                        <option value="">Selecione…</option>
+                        {NOTE_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-6 flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-end">
+            <Button variant="outline" onClick={onCancelar}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={onSalvar}
+              disabled={salvando || !criterios.length}
+              className="gap-2"
+            >
+              <Save className="h-4 w-4" />
+              {salvando ? "Salvando..." : "Salvar avaliação"}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function NovaOcorrenciaDialog({
+  open,
+  onOpenChange,
+  tipo,
+  setTipo,
+  data,
+  setData,
+  obs,
+  setObs,
+  file,
+  setFile,
+  saving,
+  onSalvar,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  tipo: OcorrenciaTipo;
+  setTipo: (t: OcorrenciaTipo) => void;
+  data: string;
+  setData: (v: string) => void;
+  obs: string;
+  setObs: (v: string) => void;
+  file: File | null;
+  setFile: (f: File | null) => void;
+  saving: boolean;
+  onSalvar: () => void;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" />
+        <Dialog.Content
+          className="
+            fixed left-1/2 top-1/2 z-[60]
+            w-[92vw] max-w-[780px]
+            -translate-x-1/2 -translate-y-1/2
+            rounded-2xl
+            bg-white
+            text-slate-900
+            border border-slate-200
+            p-4 shadow-2xl outline-none
+            max-h-[90vh] overflow-y-auto
+          "
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+            <div>
+              <Dialog.Title className="text-base font-semibold">
+                Nova ocorrência
+              </Dialog.Title>
+              <Dialog.Description className="text-xs text-slate-600">
+                Registro local (mock). Em breve vamos integrar ao Sankhya.
+              </Dialog.Description>
+            </div>
+
+            <Dialog.Close asChild>
+              <Button variant="ghost" size="icon" aria-label="Fechar">
+                <X className="h-4 w-4" />
+              </Button>
+            </Dialog.Close>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold">Tipo</p>
+              <select
+                className="
+                  mt-2 w-full rounded-md
+                  border border-slate-200 bg-white
+                  px-3 py-2 text-sm
+                  focus:outline-none focus:ring-2 focus:ring-slate-300
+                "
+                value={tipo}
+                onChange={(e) => setTipo(e.target.value as OcorrenciaTipo)}
+              >
+                <option>Advertência</option>
+                <option>Ajuste de ponto</option>
+                <option>Atestado</option>
+                <option>Outros</option>
+              </select>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold">Data</p>
+              <Input
+                type="date"
+                value={data}
+                onChange={(e) => setData(e.target.value)}
+                className="mt-2 h-10"
+              />
+            </div>
+
+            <div className="md:col-span-2 rounded-xl border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold">Observação</p>
+              <textarea
+                value={obs}
+                onChange={(e) => setObs(e.target.value)}
+                rows={5}
+                placeholder="Descreva a solicitação / ocorrência (advertência, ajuste de ponto, atestado, etc.)…"
+                className="
+                  mt-2 w-full rounded-md
+                  border border-slate-200 bg-white
+                  px-3 py-2 text-sm
+                  focus:outline-none focus:ring-2 focus:ring-slate-300
+                "
+              />
+              <p className="mt-2 text-[11px] text-slate-600">
+                Dica: seja objetivo e inclua referências de datas/horários quando for
+                ajuste de ponto.
+              </p>
+            </div>
+
+            <div className="md:col-span-2 rounded-xl border border-slate-200 bg-white p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold">Anexo</p>
+                  <p className="text-[11px] text-slate-600">
+                    Por enquanto, só salvamos metadados do arquivo (nome/tamanho/tipo).
+                  </p>
+                </div>
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100">
+                  <Paperclip className="h-4 w-4" />
+                </span>
+              </div>
+
+              <div className="mt-3 flex flex-col md:flex-row md:items-center gap-2">
+                <input
+                  type="file"
+                  className="text-sm"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null;
+                    setFile(f);
+                  }}
+                />
+
+                {file ? (
+                  <div className="text-xs text-slate-700">
+                    <b>{file.name}</b> • {fmtBytes(file.size)} • {file.type || "—"}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-500">
+                    Nenhum arquivo selecionado.
+                  </div>
+                )}
+
+                {file ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto gap-2"
+                    onClick={() => setFile(null)}
+                  >
+                    <X className="h-4 w-4" />
+                    Remover anexo
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={saving}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={onSalvar}
+              disabled={saving || !obs.trim() || !data}
+              className="gap-2"
+            >
+              <Save className="h-4 w-4" />
+              {saving ? "Salvando..." : "Salvar ocorrência"}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/* =========================================================
+   PAGE
+========================================================= */
+
 export default function FuncionarioDetalhePage() {
   const { codfunc } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
   const state = (location.state || {}) as LocationState;
+
+  const cod = Number(codfunc);
 
   const [tab, setTab] = useState<TabKey>("metas");
   const [membro, setMembro] = useState<MembroBasico | null>(state.membro || null);
@@ -291,46 +693,41 @@ export default function FuncionarioDetalhePage() {
   const [metasLoading, setMetasLoading] = useState(false);
   const [metasErro, setMetasErro] = useState<string | null>(null);
 
-  // ===================== CHECK-INS =====================
+  // CHECK-INS
   const anoAtual = String(new Date().getFullYear());
   const [checkinAno, setCheckinAno] = useState<string>(anoAtual);
-
   const [aval, setAval] = useState<AvalCriterio[]>([]);
   const [avalLoading, setAvalLoading] = useState(false);
   const [avalErro, setAvalErro] = useState<string | null>(null);
 
-  const [novoOpen, setNovoOpen] = useState(false);
+  const [novoOpen, setNovoOpen] = useState<boolean>(false); // ✅ boolean
   const [criterios, setCriterios] = useState<Criterio[]>([]);
   const [criteriosLoading, setCriteriosLoading] = useState(false);
   const [criteriosErro, setCriteriosErro] = useState<string | null>(null);
-
   const [notas, setNotas] = useState<Record<number, number>>({});
   const [salvandoAvaliacao, setSalvandoAvaliacao] = useState(false);
 
-  // ✅ filtros/visual (checkin)
   const [criterioQuery, setCriterioQuery] = useState("");
   const [onlyLow, setOnlyLow] = useState(false);
   const [chartMode, setChartMode] = useState<"top" | "all">("top");
 
-  // ===================== OCORRÊNCIAS (FRONT ONLY) =====================
+  // OCORRÊNCIAS
   const [occRows, setOccRows] = useState<OcorrenciaItem[]>([]);
   const [occLoading, setOccLoading] = useState(false);
 
-  const [occNovoOpen, setOccNovoOpen] = useState(false);
+  const [occNovoOpen, setOccNovoOpen] = useState<boolean>(false); // ✅ boolean
   const [occTipo, setOccTipo] = useState<OcorrenciaTipo>("Advertência");
-  const [occData, setOccData] = useState<string>(() => {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${dd}`;
-  });
+  const [occData, setOccData] = useState<string>(todayYMD());
   const [occObs, setOccObs] = useState<string>("");
   const [occFile, setOccFile] = useState<File | null>(null);
   const [occSaving, setOccSaving] = useState(false);
   const [occQuery, setOccQuery] = useState("");
 
-  const cod = Number(codfunc);
+  // ✅ “Cinto de segurança”: ao trocar aba, fecha modais
+  useEffect(() => {
+    setNovoOpen(false);
+    setOccNovoOpen(false);
+  }, [tab]);
 
   // ---------- Carrega dados básicos do colaborador ----------
   useEffect(() => {
@@ -396,7 +793,6 @@ export default function FuncionarioDetalhePage() {
     if (!cod) return;
 
     let cancel = false;
-
     (async () => {
       try {
         setMetasLoading(true);
@@ -456,10 +852,8 @@ export default function FuncionarioDetalhePage() {
 
           const statusStr = String(r.STATUS ?? "Dentro do esperado");
           let status: MetaItem["status"] = "Dentro do esperado";
-          if (statusStr.toLowerCase().includes("abaixo"))
-            status = "Abaixo do esperado";
-          else if (statusStr.toLowerCase().includes("acima"))
-            status = "Acima do esperado";
+          if (statusStr.toLowerCase().includes("abaixo")) status = "Abaixo do esperado";
+          else if (statusStr.toLowerCase().includes("acima")) status = "Acima do esperado";
 
           return {
             id: Number(r.ID),
@@ -554,9 +948,7 @@ export default function FuncionarioDetalhePage() {
       setCriterios(list);
     } catch (e: any) {
       console.error("[Check-ins] erro ao carregar critérios:", e);
-      setCriteriosErro(
-        e?.message || "Falha ao carregar os critérios de avaliação."
-      );
+      setCriteriosErro(e?.message || "Falha ao carregar os critérios de avaliação.");
       setCriterios([]);
     } finally {
       setCriteriosLoading(false);
@@ -604,10 +996,7 @@ export default function FuncionarioDetalhePage() {
   }, [aval]);
 
   const avalFiltrada = useMemo(() => {
-    let list = [...aval].map((a) => ({
-      ...a,
-      percentual: clampPct(a.percentual),
-    }));
+    let list = [...aval].map((a) => ({ ...a, percentual: clampPct(a.percentual) }));
 
     const q = criterioQuery.trim().toLowerCase();
     if (q) {
@@ -656,16 +1045,16 @@ export default function FuncionarioDetalhePage() {
     }));
   }, [aval]);
 
-  // =========================================================
-  // PDF (Avaliação comportamental)
-  // =========================================================
+  // PDF
   const imprimirAvaliacaoPDF = () => {
     try {
       const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
 
       const title = "Avaliação Comportamental";
       const sub = `DTREF ${checkinAno}`;
-      const nome = membro?.nome ? `${membro.codfunc} - ${membro.nome}` : `CODFUNC ${cod}`;
+      const nome = membro?.nome
+        ? `${membro.codfunc} - ${membro.nome}`
+        : `CODFUNC ${cod}`;
       const depto = membro?.depto ? `• ${membro.depto}` : "";
       const cargo = membro?.cargo ? `• ${membro.cargo}` : "";
 
@@ -759,9 +1148,7 @@ export default function FuncionarioDetalhePage() {
     }
   };
 
-  // =========================================================
-  // SALVAR NO SANKHYA (AD_TFPFUNAC) via /api/sankhya/dataset/save
-  // =========================================================
+  // SALVAR (mantido)
   const salvarNovaAvaliacao = async () => {
     if (!cod) return;
 
@@ -817,14 +1204,16 @@ export default function FuncionarioDetalhePage() {
     }
   };
 
-  // ===================== OCORRÊNCIAS (FRONT ONLY) =====================
+  // OCORRÊNCIAS LOCAL
   const carregarOcorrenciasLocal = async () => {
     if (!cod) return;
     setOccLoading(true);
     try {
       const key = storageKeyOcorrencias(cod);
       const list = safeParseJSON<OcorrenciaItem[]>(localStorage.getItem(key), []);
-      const sorted = [...list].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      const sorted = [...list].sort((a, b) =>
+        (b.createdAt || "").localeCompare(a.createdAt || "")
+      );
       setOccRows(sorted);
     } finally {
       setOccLoading(false);
@@ -872,13 +1261,7 @@ export default function FuncionarioDetalhePage() {
 
       setOccNovoOpen(false);
       setOccTipo("Advertência");
-      setOccData(() => {
-        const d = new Date();
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, "0");
-        const dd = String(d.getDate()).padStart(2, "0");
-        return `${y}-${m}-${dd}`;
-      });
+      setOccData(todayYMD());
       setOccObs("");
       setOccFile(null);
 
@@ -920,13 +1303,11 @@ export default function FuncionarioDetalhePage() {
 
   const metasResumo = useMemo(() => {
     if (!metas.length) return { total: 0, concluidas: 0, abaixo: 0 };
-
     const total = metas.length;
     const concluidas = metas.filter((m) => m.atingimento >= 100).length;
     const abaixo = metas.filter(
       (m) => m.atingimento < 100 && m.status === "Abaixo do esperado"
     ).length;
-
     return { total, concluidas, abaixo };
   }, [metas]);
 
@@ -965,7 +1346,7 @@ export default function FuncionarioDetalhePage() {
     { key: "funcoes", label: "Funções / Papéis", icon: BriefcaseBusiness },
     { key: "pdi", label: "PDI", icon: Target },
     { key: "checkin", label: "Avaliação Comportamental", icon: CheckSquare },
-    { key: "ocorrencias", label: "Ocorrências", icon: ClipboardList }, // ✅ NOVA ABA
+    { key: "ocorrencias", label: "Ocorrências", icon: ClipboardList },
     { key: "anotacoes", label: "Anotações", icon: MessageCircle },
   ] as const;
 
@@ -1066,77 +1447,19 @@ export default function FuncionarioDetalhePage() {
 
       {/* Conteúdo principal */}
       <main className="flex-1 overflow-hidden flex flex-col">
-        <div className="px-5 pt-4 pb-3 flex items-center justify-between border-b">
-          <div className="flex flex-col gap-1">
-            <div className="inline-flex items-center gap-2">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-foreground text-background">
-                <currentTabConfig.icon className="h-4 w-4" />
-              </span>
-              <h1 className="text-base font-semibold">
-                {tab === "metas" && "Metas do colaborador"}
-                {tab === "combinados" && "Combinados"}
-                {tab === "funcoes" && "Funções / Papéis"}
-                {tab === "pdi" && "Plano de Desenvolvimento Individual"}
-                {tab === "checkin" && "Avaliação comportamental"}
-                {tab === "ocorrencias" && "Ocorrências"}
-                {tab === "anotacoes" && "Anotações"}
-              </h1>
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              {membro?.nome ? `Você está visualizando ${membro.nome}.` : ""}
-            </p>
-          </div>
-
-          {/* Header actions */}
-          {tab === "checkin" ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={() => carregarAvaliacaoAno(checkinAno)}
-                disabled={avalLoading}
-              >
-                <RefreshCw className="h-4 w-4" />
-                Atualizar
-              </Button>
-
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={imprimirAvaliacaoPDF}
-                disabled={avalLoading || !aval.length}
-              >
-                <FileDown className="h-4 w-4" />
-                Imprimir PDF
-              </Button>
-
-              <Button size="sm" className="gap-2" onClick={abrirNovaAvaliacao}>
-                <Plus className="h-4 w-4" />
-                Nova avaliação
-              </Button>
-            </div>
-          ) : tab === "ocorrencias" ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={carregarOcorrenciasLocal}
-                disabled={occLoading}
-              >
-                <RefreshCw className="h-4 w-4" />
-                Atualizar
-              </Button>
-
-              <Button size="sm" className="gap-2" onClick={() => setOccNovoOpen(true)}>
-                <Plus className="h-4 w-4" />
-                Nova ocorrência
-              </Button>
-            </div>
-          ) : null}
-        </div>
+        <PageHeader
+          tab={tab}
+          membro={membro}
+          currentTabConfig={currentTabConfig}
+          onCheckinAtualizar={() => carregarAvaliacaoAno(checkinAno)}
+          onCheckinPdf={imprimirAvaliacaoPDF}
+          onCheckinNovo={abrirNovaAvaliacao}
+          onOccAtualizar={carregarOcorrenciasLocal}
+          onOccNovo={() => setOccNovoOpen(true)}
+          avalLoading={avalLoading}
+          avalLen={aval.length}
+          occLoading={occLoading}
+        />
 
         <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-4">
           {erro && <div className="text-sm text-red-600">{erro}</div>}
@@ -1156,10 +1479,7 @@ export default function FuncionarioDetalhePage() {
                           <p className="text-3xl font-semibold leading-none">
                             {metas.length ? `${atingimentoMetas}%` : "-"}
                           </p>
-                          <Badge
-                            variant="outline"
-                            className={`text-[10px] ${badgeToneClass}`}
-                          >
+                          <Badge variant="outline" className={`text-[10px] ${badgeToneClass}`}>
                             {statusAtingimento.label}
                           </Badge>
                         </div>
@@ -1189,12 +1509,8 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] text-muted-foreground">
-                          Total de metas
-                        </p>
-                        <p className="mt-1 text-3xl font-semibold leading-none">
-                          {metasResumo.total}
-                        </p>
+                        <p className="text-[11px] text-muted-foreground">Total de metas</p>
+                        <p className="mt-1 text-3xl font-semibold leading-none">{metasResumo.total}</p>
                         <p className="mt-2 text-[11px] text-muted-foreground">
                           Metas apresentadas no período
                         </p>
@@ -1210,15 +1526,11 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] text-muted-foreground">
-                          Concluídas
-                        </p>
+                        <p className="text-[11px] text-muted-foreground">Concluídas</p>
                         <p className="mt-1 text-3xl font-semibold leading-none">
                           {metasResumo.concluidas}
                         </p>
-                        <p className="mt-2 text-[11px] text-muted-foreground">
-                          Atingimento ≥ 100%
-                        </p>
+                        <p className="mt-2 text-[11px] text-muted-foreground">Atingimento ≥ 100%</p>
                       </div>
                       <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
                         <CheckCircle2 className="h-4 w-4 text-foreground" />
@@ -1231,12 +1543,8 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] text-muted-foreground">
-                          Abaixo do esperado
-                        </p>
-                        <p className="mt-1 text-3xl font-semibold leading-none">
-                          {metasResumo.abaixo}
-                        </p>
+                        <p className="text-[11px] text-muted-foreground">Abaixo do esperado</p>
+                        <p className="mt-1 text-3xl font-semibold leading-none">{metasResumo.abaixo}</p>
                         <p className="mt-2 text-[11px] text-muted-foreground">
                           Metas com status de atenção
                         </p>
@@ -1251,9 +1559,7 @@ export default function FuncionarioDetalhePage() {
 
               <div className="space-y-3 mt-1">
                 {metasLoading ? (
-                  <div className="text-sm text-muted-foreground">
-                    Carregando metas do colaborador…
-                  </div>
+                  <div className="text-sm text-muted-foreground">Carregando metas do colaborador…</div>
                 ) : metasErro ? (
                   <div className="text-sm text-red-600">{metasErro}</div>
                 ) : metas.length === 0 ? (
@@ -1302,18 +1608,502 @@ export default function FuncionarioDetalhePage() {
             </>
           )}
 
-          {/* ======================= CHECK-INS ======================= */}
+          {/* ======================= CHECK-INS (COMPLETO) ======================= */}
           {tab === "checkin" && (
             <>
-              {/* (mantive sua aba checkin inteira como estava) */}
-              {/* ... o restante do conteúdo de checkin é igual ao que você já tinha ... */}
-              {/* Para não explodir a mensagem, mantive exatamente como estava no seu código acima. */}
-              {/* ✅ Cole o bloco completo da aba checkin do seu arquivo original aqui (sem alterações). */}
-              <Card className="bg-card border-dashed">
-                <CardContent className="p-6 text-sm text-muted-foreground">
-                  (Conteúdo da aba <b>Avaliação Comportamental</b> mantido igual ao seu arquivo original)
+              {/* KPI GRID */}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                <Card className="bg-card border">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] text-muted-foreground">Referência (DTREF)</p>
+                        <div className="mt-2 flex items-center gap-2">
+                          <Input
+                            value={checkinAno}
+                            onChange={(e) => setCheckinAno(e.target.value)}
+                            className="h-9 w-28 text-sm"
+                            placeholder="YYYY"
+                          />
+                          <Badge variant="outline" className="text-[10px]">
+                            Ano
+                          </Badge>
+                        </div>
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Clique em “Atualizar”.
+                        </p>
+                      </div>
+                      <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
+                        <CheckSquare className="h-4 w-4" />
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-card border">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[11px] text-muted-foreground">Nota média</p>
+                        <div className="mt-1 flex items-end gap-2">
+                          <p className="text-3xl font-semibold leading-none">
+                            {aval.length ? mediaNotaAtual.toFixed(1) : "-"}
+                          </p>
+                          <span className="text-[11px] text-muted-foreground">/ 5</span>
+                        </div>
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Base: {aval.length} critério(s)
+                        </p>
+                      </div>
+
+                      <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
+                        <TrendingUp className="h-4 w-4" />
+                      </span>
+                    </div>
+
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">Conversão</span>
+                        <span className="font-medium">
+                          {aval.length ? `${percentualMedioAtual}%` : "-"}
+                        </span>
+                      </div>
+                      <Progress value={aval.length ? percentualMedioAtual : 0} className="h-2 mt-1" />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-card border">
+                  <CardContent className="p-4">
+                    {(() => {
+                      const tone = toneFromPercent(percentualMedioAtual);
+                      return (
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[11px] text-muted-foreground">Status geral</p>
+                            <div className="mt-1 flex items-end gap-2">
+                              <p className="text-3xl font-semibold leading-none">
+                                {aval.length ? `${percentualMedioAtual}%` : "-"}
+                              </p>
+                              <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                                {tone.label}
+                              </Badge>
+                            </div>
+                            <p className="mt-2 text-[11px] text-muted-foreground">
+                              Visão consolidada do período
+                            </p>
+                          </div>
+
+                          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
+                            <SlidersHorizontal className="h-4 w-4" />
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-card border">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] text-muted-foreground">Abaixo (&lt; 80%)</p>
+                        <p className="mt-1 text-3xl font-semibold leading-none">
+                          {aval.length ? qtdAbaixo : "-"}
+                        </p>
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Total: {aval.length}
+                        </p>
+                      </div>
+
+                      <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
+                        <AlertTriangle className="h-4 w-4" />
+                      </span>
+                    </div>
+
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-muted-foreground">Proporção</span>
+                        <span className="font-medium">
+                          {aval.length ? `${Math.round((qtdAbaixo / aval.length) * 100)}%` : "-"}
+                        </span>
+                      </div>
+                      <Progress
+                        value={aval.length ? Math.round((qtdAbaixo / aval.length) * 100) : 0}
+                        className="h-2 mt-1"
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* TOP / BOTTOM / PLANO */}
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                <Card className="bg-card border">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">Top 3 (melhores)</p>
+                        <p className="text-[11px] text-muted-foreground">Destaques do período</p>
+                      </div>
+                      <Badge variant="outline" className="text-[11px]">{top3.length}</Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    {!avalLoading && !top3.length ? (
+                      <div className="py-4 text-sm text-muted-foreground">Sem dados.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {top3.map((t) => {
+                          const tone = toneFromPercent(t.percentual);
+                          return (
+                            <div key={t.codigo} className="rounded-xl border bg-background p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className="text-[10px]">{t.codigo}</Badge>
+                                    <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                                      {t.percentual}%
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-1 text-xs leading-snug whitespace-normal break-words">
+                                    {t.descr}
+                                  </p>
+                                </div>
+                                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
+                                  <CheckCircle2 className="h-4 w-4" />
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-card border">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">Bottom 3 (piores)</p>
+                        <p className="text-[11px] text-muted-foreground">Pontos prioritários</p>
+                      </div>
+                      <Badge variant="outline" className="text-[11px]">{bottom3.length}</Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    {!avalLoading && !bottom3.length ? (
+                      <div className="py-4 text-sm text-muted-foreground">Sem dados.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {bottom3.map((t) => {
+                          const tone = toneFromPercent(t.percentual);
+                          return (
+                            <div key={t.codigo} className="rounded-xl border bg-background p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className="text-[10px]">{t.codigo}</Badge>
+                                    <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                                      {t.percentual}%
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-1 text-xs leading-snug whitespace-normal break-words">
+                                    {t.descr}
+                                  </p>
+                                </div>
+                                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
+                                  <AlertTriangle className="h-4 w-4" />
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-card border">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">Plano de ação sugerido</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Recomendação automática (abaixo de 80%)
+                        </p>
+                      </div>
+                      <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
+                        <Sparkles className="h-4 w-4" />
+                      </span>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    {!avalLoading && !planoAcao.length ? (
+                      <div className="py-4 text-sm text-muted-foreground">
+                        Nenhum critério abaixo de 80% 🎉
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {planoAcao.slice(0, 6).map((p) => (
+                          <div key={p.codigo} className="rounded-xl border bg-background p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="outline" className="text-[10px]">{p.codigo}</Badge>
+                                  <Badge variant="outline" className={`text-[10px] ${toneFromPercent(p.percentual).cls}`}>
+                                    {p.percentual}%
+                                  </Badge>
+                                </div>
+                                <p className="mt-1 text-xs leading-snug whitespace-normal break-words">
+                                  {p.descr}
+                                </p>
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  Sugestão:{" "}
+                                  <span className="font-medium text-foreground">{p.sugestao}</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {planoAcao.length > 6 ? (
+                          <p className="text-[11px] text-muted-foreground">
+                            +{planoAcao.length - 6} itens no PDF
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* CONTROLES */}
+              <Card className="bg-card border">
+                <CardContent className="p-4">
+                  <div className="flex flex-col lg:flex-row lg:items-center gap-3 justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold">
+                        Avaliação comportamental • {checkinAno}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Use filtros para focar nos pontos críticos. O gráfico horizontal melhora a leitura.
+                      </p>
+                      {avalErro ? <p className="mt-2 text-sm text-red-600">{avalErro}</p> : null}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          value={criterioQuery}
+                          onChange={(e) => setCriterioQuery(e.target.value)}
+                          placeholder="Buscar critério (código ou texto)…"
+                          className="h-9 w-[290px] pl-8"
+                        />
+                      </div>
+
+                      <Button
+                        variant={onlyLow ? "default" : "outline"}
+                        size="sm"
+                        className="gap-2"
+                        onClick={() => setOnlyLow((s) => !s)}
+                      >
+                        <AlertTriangle className="h-4 w-4" />
+                        {onlyLow ? "Somente abaixo" : "Todos"}
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        onClick={() => setChartMode((m) => (m === "top" ? "all" : "top"))}
+                      >
+                        <SlidersHorizontal className="h-4 w-4" />
+                        {chartMode === "top" ? "Top 12 no gráfico" : "Todos no gráfico"}
+                      </Button>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        onClick={imprimirAvaliacaoPDF}
+                        disabled={avalLoading || !aval.length}
+                      >
+                        <FileDown className="h-4 w-4" />
+                        PDF
+                      </Button>
+                    </div>
+                  </div>
+
+                  {avalLoading ? (
+                    <div className="mt-3 text-sm text-muted-foreground">Carregando avaliação…</div>
+                  ) : !aval.length ? (
+                    <div className="mt-3 text-sm text-muted-foreground">
+                      Nenhuma avaliação encontrada para o período informado.
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
+
+              {/* GRÁFICO + LISTA */}
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                <Card className="bg-card border xl:col-span-2">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">Gráfico por critério</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Percentual de atingimento por critério (nota / 5).
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="text-[11px]">
+                        {chartData.length} item(ns)
+                      </Badge>
+                    </div>
+                  </CardHeader>
+
+                  <CardContent className="pt-0">
+                    {avalLoading ? (
+                      <div className="h-[320px] grid place-items-center text-sm text-muted-foreground">
+                        Carregando…
+                      </div>
+                    ) : !chartData.length ? (
+                      <div className="h-[320px] grid place-items-center text-sm text-muted-foreground">
+                        Nenhum item para exibir com os filtros atuais.
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border bg-background max-h-[440px] overflow-y-auto">
+                        <div style={{ height: chartHeight }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart
+                              data={chartData}
+                              layout="vertical"
+                              margin={{ left: 175, right: 16, top: 12, bottom: 12 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis
+                                type="number"
+                                domain={[0, 100]}
+                                tickFormatter={(v) => `${v}%`}
+                                tick={{ fontSize: 11 }}
+                              />
+                              <YAxis
+                                type="category"
+                                dataKey="criterio"
+                                width={170}
+                                tick={<WrappedYAxisTick />}
+                              />
+                              <Tooltip
+                                formatter={(value: any, _name: any, props: any) => {
+                                  const nota = props?.payload?.nota ?? "-";
+                                  const codigo = props?.payload?.codigo ?? "";
+                                  return [`${value}% (nota ${nota}/5)`, `Atingimento • cód ${codigo}`];
+                                }}
+                                labelFormatter={(label) => `Critério: ${label}`}
+                              />
+                              <Bar
+                                dataKey="percentual"
+                                fill="hsl(var(--primary))"
+                                radius={[6, 6, 6, 6]}
+                              />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-card border">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">Lista de critérios</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Ordenado do pior para o melhor (priorização).
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="text-[11px]">{avalFiltrada.length}</Badge>
+                    </div>
+                  </CardHeader>
+
+                  <CardContent className="pt-0">
+                    {!avalLoading && !avalFiltrada.length ? (
+                      <div className="py-6 text-sm text-muted-foreground">
+                        Nenhum critério com os filtros atuais.
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border bg-background">
+                        <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[11px] text-muted-foreground border-b">
+                          <div className="col-span-2">Cód</div>
+                          <div className="col-span-7">Critério</div>
+                          <div className="col-span-3 text-right">Nota / %</div>
+                        </div>
+
+                        <div className="max-h-[440px] overflow-y-auto divide-y">
+                          {avalLoading ? (
+                            <div className="px-3 py-6 text-sm text-muted-foreground">Carregando…</div>
+                          ) : (
+                            avalFiltrada.map((a) => {
+                              const tone = toneFromPercent(a.percentual);
+                              return (
+                                <div key={`${a.codigo}-${a.descr}`} className="px-3 py-2">
+                                  <div className="grid grid-cols-12 gap-2 items-start">
+                                    <div className="col-span-2">
+                                      <Badge variant="outline" className="text-[10px]">
+                                        {a.codigo}
+                                      </Badge>
+                                    </div>
+
+                                    <div className="col-span-7 whitespace-normal break-words leading-snug text-xs">
+                                      {a.descr}
+
+                                      <div className="mt-2">
+                                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                          <span>{tone.label}</span>
+                                          <span className="font-medium text-foreground">
+                                            {a.percentual}%
+                                          </span>
+                                        </div>
+                                        <Progress value={a.percentual} className="h-1.5 mt-1" />
+                                      </div>
+                                    </div>
+
+                                    <div className="col-span-3 text-right">
+                                      <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                                        {a.pontuacao}/5 • {a.percentual}%
+                                      </Badge>
+                                      <div className="text-[10px] text-muted-foreground mt-1">
+                                        {notaLabel(a.pontuacao)}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* MODAL NOVA AVALIAÇÃO */}
+              <NovaAvaliacaoDialog
+                open={novoOpen}
+                onOpenChange={setNovoOpen} // ✅ evita bug de abrir sozinho
+                checkinAno={checkinAno}
+                criterios={criterios}
+                criteriosLoading={criteriosLoading}
+                criteriosErro={criteriosErro}
+                notas={notas}
+                setNotas={setNotas}
+                onCancelar={fecharNovaAvaliacao}
+                onSalvar={salvarNovaAvaliacao}
+                salvando={salvandoAvaliacao}
+              />
             </>
           )}
 
@@ -1321,7 +2111,6 @@ export default function FuncionarioDetalhePage() {
           {tab === "ocorrencias" && (
             <>
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-                {/* Resumo */}
                 <Card className="bg-card border xl:col-span-1">
                   <CardHeader className="pb-2">
                     <div className="flex items-start justify-between gap-2">
@@ -1339,9 +2128,7 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="pt-0 space-y-3">
                     <div className="rounded-xl border bg-background p-3">
                       <p className="text-[11px] text-muted-foreground">Total de ocorrências</p>
-                      <p className="text-3xl font-semibold leading-none mt-1">
-                        {occRows.length}
-                      </p>
+                      <p className="text-3xl font-semibold leading-none mt-1">{occRows.length}</p>
                     </div>
 
                     <div className="rounded-xl border bg-background p-3">
@@ -1369,7 +2156,6 @@ export default function FuncionarioDetalhePage() {
                   </CardContent>
                 </Card>
 
-                {/* Lista + busca */}
                 <Card className="bg-card border xl:col-span-2">
                   <CardHeader className="pb-2">
                     <div className="flex items-start justify-between gap-2">
@@ -1420,13 +2206,12 @@ export default function FuncionarioDetalhePage() {
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <Badge variant="outline" className="text-[10px]">
-                                    {o.tipo}
-                                  </Badge>
+                                  <Badge variant="outline" className="text-[10px]">{o.tipo}</Badge>
                                   <Badge variant="secondary" className="text-[10px] gap-1">
                                     <CalendarDays className="h-3 w-3" />
                                     {brDate(o.data)}
                                   </Badge>
+
                                   {o.anexo?.name ? (
                                     <Badge variant="outline" className="text-[10px] gap-1">
                                       <Paperclip className="h-3 w-3" />
@@ -1477,165 +2262,21 @@ export default function FuncionarioDetalhePage() {
                 </Card>
               </div>
 
-              {/* Modal: Nova ocorrência */}
-              <Dialog.Root
+              {/* MODAL NOVA OCORRÊNCIA */}
+              <NovaOcorrenciaDialog
                 open={occNovoOpen}
-                onOpenChange={(o) => {
-                  if (!o) {
-                    setOccNovoOpen(false);
-                    return;
-                  }
-                  setOccNovoOpen(true);
-                }}
-              >
-                <Dialog.Portal>
-                  <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" />
-                  <Dialog.Content
-                    className="
-                      fixed left-1/2 top-1/2
-                      z-[60]
-                      w-[92vw] max-w-[780px]
-                      -translate-x-1/2 -translate-y-1/2
-                      rounded-2xl
-                      bg-white
-                      text-slate-900
-                      border border-slate-200
-                      p-4 shadow-2xl outline-none
-                      max-h-[90vh] overflow-y-auto
-                    "
-                  >
-                    <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
-                      <div>
-                        <Dialog.Title className="text-base font-semibold">
-                          Nova ocorrência
-                        </Dialog.Title>
-                        <Dialog.Description className="text-xs text-slate-600">
-                          Registro local (mock). Em breve vamos integrar ao Sankhya.
-                        </Dialog.Description>
-                      </div>
-
-                      <Dialog.Close asChild>
-                        <Button variant="ghost" size="icon" aria-label="Fechar">
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </Dialog.Close>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <p className="text-xs font-semibold">Tipo</p>
-                        <select
-                          className="
-                            mt-2 w-full rounded-md
-                            border border-slate-200 bg-white
-                            px-3 py-2 text-sm
-                            focus:outline-none focus:ring-2 focus:ring-slate-300
-                          "
-                          value={occTipo}
-                          onChange={(e) => setOccTipo(e.target.value as OcorrenciaTipo)}
-                        >
-                          <option>Advertência</option>
-                          <option>Ajuste de ponto</option>
-                          <option>Atestado</option>
-                          <option>Outros</option>
-                        </select>
-                      </div>
-
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <p className="text-xs font-semibold">Data</p>
-                        <Input
-                          type="date"
-                          value={occData}
-                          onChange={(e) => setOccData(e.target.value)}
-                          className="mt-2 h-10"
-                        />
-                      </div>
-
-                      <div className="md:col-span-2 rounded-xl border border-slate-200 bg-white p-3">
-                        <p className="text-xs font-semibold">Observação</p>
-                        <textarea
-                          value={occObs}
-                          onChange={(e) => setOccObs(e.target.value)}
-                          rows={5}
-                          placeholder="Descreva a solicitação / ocorrência (advertência, ajuste de ponto, atestado, etc.)…"
-                          className="
-                            mt-2 w-full rounded-md
-                            border border-slate-200 bg-white
-                            px-3 py-2 text-sm
-                            focus:outline-none focus:ring-2 focus:ring-slate-300
-                          "
-                        />
-                        <p className="mt-2 text-[11px] text-slate-600">
-                          Dica: seja objetivo e inclua referências de datas/horários quando for ajuste de ponto.
-                        </p>
-                      </div>
-
-                      <div className="md:col-span-2 rounded-xl border border-slate-200 bg-white p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-semibold">Anexo</p>
-                            <p className="text-[11px] text-slate-600">
-                              Por enquanto, só vamos “guardar” os metadados do arquivo (nome/tamanho/tipo).
-                            </p>
-                          </div>
-                          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100">
-                            <Paperclip className="h-4 w-4" />
-                          </span>
-                        </div>
-
-                        <div className="mt-3 flex flex-col md:flex-row md:items-center gap-2">
-                          <input
-                            type="file"
-                            className="text-sm"
-                            onChange={(e) => {
-                              const f = e.target.files?.[0] ?? null;
-                              setOccFile(f);
-                            }}
-                          />
-
-                          {occFile ? (
-                            <div className="text-xs text-slate-700">
-                              <b>{occFile.name}</b> • {fmtBytes(occFile.size)} • {occFile.type || "—"}
-                            </div>
-                          ) : (
-                            <div className="text-xs text-slate-500">Nenhum arquivo selecionado.</div>
-                          )}
-
-                          {occFile ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="ml-auto gap-2"
-                              onClick={() => setOccFile(null)}
-                            >
-                              <X className="h-4 w-4" />
-                              Remover anexo
-                            </Button>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-end">
-                      <Button
-                        variant="outline"
-                        onClick={() => setOccNovoOpen(false)}
-                        disabled={occSaving}
-                      >
-                        Cancelar
-                      </Button>
-                      <Button
-                        onClick={salvarOcorrenciaLocal}
-                        disabled={occSaving || !occObs.trim() || !occData}
-                        className="gap-2"
-                      >
-                        <Save className="h-4 w-4" />
-                        {occSaving ? "Salvando..." : "Salvar ocorrência"}
-                      </Button>
-                    </div>
-                  </Dialog.Content>
-                </Dialog.Portal>
-              </Dialog.Root>
+                onOpenChange={setOccNovoOpen} // ✅ evita bug de abrir sozinho
+                tipo={occTipo}
+                setTipo={setOccTipo}
+                data={occData}
+                setData={setOccData}
+                obs={occObs}
+                setObs={setOccObs}
+                file={occFile}
+                setFile={setOccFile}
+                saving={occSaving}
+                onSalvar={salvarOcorrenciaLocal}
+              />
             </>
           )}
 

@@ -9,7 +9,7 @@ export default defineConfig({
     host: true,
      proxy: {
       "/api": {
-        target: "http://sankhya.nxboats.com.br:3200",
+        target:  "http://sankhya.nxboats.com.br:3200",
         changeOrigin: true,
         // se o backend não usa /api no path base, reescreva:
         // rewrite: (path) => path.replace(/^\/api/, "/api"),

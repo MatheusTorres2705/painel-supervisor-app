@@ -396,10 +396,8 @@ export default function AlocacaoPage() {
   const [atividades, setAtividades] = useState<Atividade[]>([]);
 
   const [q, setQ] = useState("");
-  const [filtroSetor, setFiltroSetor] = useState<string>("Todos");
+  const [setorSelecionado, setSetorSelecionado] = useState<string>("Todos");
 
-  // ✅ setor para alocar (AGORA também filtra grades e gantt)
-  const [setorAlocar, setSetorAlocar] = useState<string>("Todos");
 
   const preNome = sp.get("colabNome");
 
@@ -601,22 +599,23 @@ export default function AlocacaoPage() {
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
   }, [atividades]);
 
-  const setorAlocarLabel = useMemo(() => {
-    if (setorAlocar === "Todos") return "";
-    const cod = Number(setorAlocar);
-    const found = setoresDisponiveis.find(([c]) => c === cod);
-    if (!found) return String(setorAlocar);
-    return `${found[0]} - ${found[1]}`;
-  }, [setorAlocar, setoresDisponiveis]);
+const setorSelecionadoLabel = useMemo(() => {
+  if (setorSelecionado === "Todos") return "";
+  const cod = Number(setorSelecionado);
+  const found = setoresDisponiveis.find(([c]) => c === cod);
+  if (!found) return String(setorSelecionado);
+  return `${found[0]} - ${found[1]}`;
+}, [setorSelecionado, setoresDisponiveis]);
 
-  // ✅ lista filtrada (agora é a base de TUDO que exibe colaborador)
-  const colabsVisiveis = useMemo(() => {
-    if (setorAlocar === "Todos") return colabs;
-    return colabs.filter((c) => String(c.codSetor) === String(setorAlocar));
-  }, [colabs, setorAlocar]);
 
-  // ✅ lista filtrada para usar no “Alocar para”
-  const colabsParaAlocar = colabsVisiveis;
+const colabsVisiveis = useMemo(() => {
+  if (setorSelecionado === "Todos") return colabs;
+  return colabs.filter((c) => String(c.codSetor) === String(setorSelecionado));
+}, [colabs, setorSelecionado]);
+
+const colabsParaAlocar = colabsVisiveis;
+
+
 
   // ✅ Filtra por período de DEMANDA (para você “analisar as demandas”)
   const atividadesFiltradas = useMemo(
@@ -624,7 +623,8 @@ export default function AlocacaoPage() {
       atividades.filter((a) => {
         if (a.dtDemanda < ini || a.dtDemanda > fin) return false;
 
-        if (filtroSetor !== "Todos" && String(a.codusu) !== filtroSetor) return false;
+       if (setorSelecionado !== "Todos" && String(a.codusu) !== String(setorSelecionado)) return false;
+
 
         if (q.trim()) {
           const k = q.trim().toLowerCase();
@@ -632,7 +632,7 @@ export default function AlocacaoPage() {
         }
         return true;
       }),
-    [atividades, ini, fin, filtroSetor, q]
+    [atividades, ini, fin, setorSelecionado, q]
   );
 
   // ✅ Backlog = demandas atrasadas (dtDemanda < hoje) e ainda “não feitas”
@@ -1099,7 +1099,8 @@ export default function AlocacaoPage() {
                 </span>
                 <span>
                   • Colaboradores (visíveis): {colabsVisiveis.length}
-                  {setorAlocar !== "Todos" ? ` • Setor: ${setorAlocarLabel}` : ""}
+                 {setorSelecionado !== "Todos" ? ` • Setor: ${setorSelecionadoLabel}` : ""}
+
                 </span>
                 <span className="font-medium">
                   • Dia do planejamento (Gantt): {toBR(diaPlanejamento)}
@@ -1179,27 +1180,10 @@ export default function AlocacaoPage() {
             <label className="text-xs text-muted-foreground">Setor</label>
             <select
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
-              value={filtroSetor}
-              onChange={(e) => setFiltroSetor(e.target.value)}
+              value={setorSelecionado}
+              onChange={(e) => setSetorSelecionado(e.target.value)}
             >
               <option value="Todos">Todos os setores</option>
-              {setoresDisponiveis.map(([codusu, nome]) => (
-                <option key={codusu} value={String(codusu)}>
-                  {codusu} - {nome}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* ✅ Setor para alocar (agora também filtra Colaboradores + Gantt) */}
-          <div className="col-span-6 md:col-span-2">
-            <label className="text-xs text-muted-foreground">Setor para alocar</label>
-            <select
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
-              value={setorAlocar}
-              onChange={(e) => setSetorAlocar(e.target.value)}
-            >
-              <option value="Todos">Todos</option>
               {setoresDisponiveis.map(([codusu, nome]) => (
                 <option key={codusu} value={String(codusu)}>
                   {codusu} - {nome}
@@ -1326,7 +1310,7 @@ export default function AlocacaoPage() {
                         <ColabMultiSelect
                           atividade={a}
                           colabs={colabsParaAlocar}
-                          setorAlocarLabel={setorAlocarLabel}
+                          setorAlocarLabel={setorSelecionado}
                           onChange={(alocados) =>
                             setAtividades((arr) =>
                               arr.map((x) => (x.id === a.id ? { ...x, alocados } : x))
@@ -1370,9 +1354,9 @@ export default function AlocacaoPage() {
         <CardHeader className="py-3">
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-semibold">Colaboradores (grade)</h4>
-            {setorAlocar !== "Todos" ? (
+            {setorSelecionado !== "Todos" ? (
               <Badge variant="secondary" className="text-[11px]">
-                Filtrado: {setorAlocarLabel}
+                Filtrado: {setorSelecionadoLabel}
               </Badge>
             ) : null}
           </div>
