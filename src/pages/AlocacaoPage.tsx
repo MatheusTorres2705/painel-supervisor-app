@@ -501,15 +501,16 @@ export default function AlocacaoPage() {
 
         // 2) Colaboradores
         const sqlColabs = `
-          SELECT DISTINCT
+           SELECT DISTINCT
             FUN.CODFUNC,
             FUN.NOMEFUNC,
             CAR.DESCRCARGO,
-            CAR.AD_CODUSU
+            SE.CODUSU AS AD_CODUSU
           FROM TFPFUN FUN
           LEFT JOIN AD_DETALCRONOGRAMAFUNC F ON FUN.CODFUNC = F.CODFUNC
           JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
-          WHERE FUN.USUVPJSUP = ${CODUSU_SUP}
+          JOIN AD_SETORESCARGO SE ON SE.CODCARGO = CAR.CODCARGO
+          WHERE FUN.USUVPJSUP =  ${CODUSU_SUP}
           ORDER BY FUN.NOMEFUNC
         `.trim();
 
