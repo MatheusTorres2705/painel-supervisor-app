@@ -5,7 +5,8 @@ import { fileURLToPath } from 'url'
 export default defineConfig({
   plugins: [react()],
    server: {
-    port:3100,
+    port:3120,
+    allowedHosts: ["sankhya.nxboats.com.br"],
     host: true,
      proxy: {
       "/api": {
