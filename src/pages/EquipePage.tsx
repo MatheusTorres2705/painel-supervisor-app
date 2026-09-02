@@ -1,5 +1,5 @@
 // src/pages/EquipePage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { obterReg } from "@/lib/obterReg";
 import { useAuth } from "@/auth/AuthProvider";
@@ -650,7 +650,7 @@ export default function EquipePage() {
 
         {/* ✅ Filtro Comportamental */}
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-[11px]">
+          <Badge variant="outline" className="text-2xs">
             Avaliação: {resumoComport.comNota} com nota • {resumoComport.semNota} sem nota
           </Badge>
 
@@ -698,11 +698,12 @@ export default function EquipePage() {
           {loading ? (
             <div className="p-4 text-sm text-muted-foreground">Carregando equipe…</div>
           ) : (
-            <div className="max-h-[calc(100vh-220px)] overflow-y-auto">
+            <div className="max-h-[70vh] overflow-auto scrollbar-slim">
+              <div className="min-w-[860px]">
               {/* Header fixo */}
               <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b">
                 {/* ✅ nova distribuição: 1 + 3 + 2 + 2 + 1 + 1 + 2 = 12 */}
-                <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[11px] text-muted-foreground">
+                <div className="grid grid-cols-12 gap-2 px-3 py-2 text-2xs text-muted-foreground">
                   <button
                     className="col-span-1 text-left inline-flex items-center gap-1"
                     onClick={() => toggleSort("rank")}
@@ -774,7 +775,7 @@ export default function EquipePage() {
                     >
                       {/* Rank */}
                       <div className="col-span-1">
-                        <Badge variant="outline" className="text-[11px]">
+                        <Badge variant="outline" className="text-2xs">
                           #{c.rank || "-"}
                         </Badge>
                       </div>
@@ -799,17 +800,17 @@ export default function EquipePage() {
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="text-sm font-medium truncate max-w-[260px]">{c.nome}</p>
 
-                            <Badge variant="secondary" className="rounded-full text-[10px]">
+                            <Badge variant="secondary" className="rounded-full text-2xs">
                               {c.senior}
                             </Badge>
 
-                            <Badge variant="outline" className="rounded-full text-[10px]">
+                            <Badge variant="outline" className="rounded-full text-2xs">
                               <span className={`mr-1 inline-block h-2 w-2 rounded-full ${disp.dot}`} />
                               {disp.label}
                             </Badge>
                           </div>
 
-                          <p className="text-[11px] text-muted-foreground">COD {c.codfunc}</p>
+                          <p className="text-2xs text-muted-foreground">COD {c.codfunc}</p>
                         </div>
                       </div>
 
@@ -830,10 +831,10 @@ export default function EquipePage() {
 
                       {/* ✅ Comportamental */}
                       <div className="col-span-1">
-                        <Badge variant="outline" className={`text-[10px] ${compTone.cls}`}>
+                        <Badge variant="outline" className={`text-2xs ${compTone.cls}`}>
                           {comp === null ? "—" : `${comp}%`}
                         </Badge>
-                        <p className="mt-1 text-[10px] text-muted-foreground">
+                        <p className="mt-1 text-2xs text-muted-foreground">
                           {compTone.label}
                         </p>
                       </div>
@@ -841,7 +842,7 @@ export default function EquipePage() {
                       {/* Atingimento + Ações */}
                       <div className="col-span-2">
                         <div className="flex items-center justify-between gap-2">
-                          <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                          <Badge variant="outline" className={`text-2xs ${tone.cls}`}>
                             {at}%
                           </Badge>
 
@@ -849,7 +850,7 @@ export default function EquipePage() {
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-8 px-2 text-[11px]"
+                              className="h-8 px-2 text-2xs"
                               onClick={() => irParaDetalhes(c)}
                             >
                               Detalhes <ChevronRight className="h-3 w-3 ml-1" />
@@ -858,7 +859,7 @@ export default function EquipePage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8 px-2 text-[11px]"
+                              className="h-8 px-2 text-2xs"
                               onClick={() => abrirHabilidades(c)}
                             >
                               Habs
@@ -868,7 +869,7 @@ export default function EquipePage() {
 
                         <div className="mt-2">
                           <Progress value={at} className="h-2" />
-                          <p className="mt-1 text-[10px] text-muted-foreground">{tone.label}</p>
+                          <p className="mt-1 text-2xs text-muted-foreground">{tone.label}</p>
                         </div>
                       </div>
                     </div>
@@ -880,6 +881,7 @@ export default function EquipePage() {
                     Nenhum colaborador encontrado com os filtros atuais.
                   </div>
                 )}
+                </div>
               </div>
             </div>
           )}
@@ -890,11 +892,11 @@ export default function EquipePage() {
       {skillsOpenFor && (
         <div className="fixed inset-0 z-50">
           <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            className="absolute inset-0 bg-foreground/50 backdrop-blur-sm"
             onClick={fecharHabilidades}
           />
 
-          <div className="absolute right-0 top-0 h-full w-full max-w-lg bg-white shadow-xl border-l">
+          <div className="absolute right-0 top-0 h-full w-full max-w-lg bg-card shadow-xl border-l">
             <div className="flex items-center justify-between p-4 border-b">
               <div className="flex items-center gap-3">
                 <Avatar className="h-10 w-10">
@@ -951,15 +953,15 @@ export default function EquipePage() {
                       >
                         <div className="col-span-7">
                           <div className="font-medium text-sm">{s.descrprod}</div>
-                          <div className="text-[11px] text-muted-foreground">
+                          <div className="text-2xs text-muted-foreground">
                             Cód. produto: {s.codprod}
                           </div>
                         </div>
                         <div className="col-span-3">
-                          <Badge variant="outline" className="text-[11px]">
+                          <Badge variant="outline" className="text-2xs">
                             {s.nivel}
                           </Badge>
-                          <p className="text-[11px] text-muted-foreground mt-1">
+                          <p className="text-2xs text-muted-foreground mt-1">
                             Desde: {s.dtInclusao}
                           </p>
                         </div>
@@ -1001,7 +1003,7 @@ export default function EquipePage() {
                         </Button>
                       </PopoverTrigger>
 
-                      <PopoverContent className="w-[420px] p-0 bg-white">
+                      <PopoverContent className="w-[420px] p-0 bg-card">
                         <Command>
                           <CommandInput placeholder="Buscar por código ou descrição..." />
                           <CommandList>

@@ -1,3 +1,105 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /*
+   * NX Boats — paleta "Deep Ocean".
+   * Formato shadcn: `H S% L%` sem wrapper hsl(), para permitir hsl(var(--x) / alpha).
+   */
+  :root {
+    --background: 204 38% 97%; /* #F6F9FB */
+    --foreground: 205 44% 10%; /* #0E1B24 */
+
+    --card: 0 0% 100%;
+    --card-foreground: 205 44% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 205 44% 10%;
+
+    --primary: 200 78% 19%; /* #0B3D57 — navy NX */
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 200 74% 27%; /* #12557A */
+
+    --secondary: 204 38% 95%;
+    --secondary-foreground: 200 78% 19%;
+
+    --muted: 204 38% 95%;
+    --muted-foreground: 207 18% 44%; /* #5B7183 — 4.9:1 sobre branco */
+
+    --accent: 188 77% 34%; /* #14889B — teal */
+    --accent-foreground: 0 0% 100%;
+    --accent-subtle: 188 60% 95%;
+
+    --destructive: 6 63% 46%; /* #C0392B */
+    --destructive-foreground: 0 0% 100%;
+    --destructive-subtle: 6 70% 96%;
+
+    --success: 154 63% 33%; /* #1F8A5B */
+    --success-foreground: 0 0% 100%;
+    --success-subtle: 154 55% 95%;
+
+    --warning: 35 79% 40%; /* #B77416 */
+    --warning-foreground: 0 0% 100%;
+    --warning-subtle: 35 85% 95%;
+
+    --border: 208 29% 91%; /* #E2E9EF */
+    --input: 208 29% 91%;
+    --ring: 190 59% 44%; /* #2E9BB0 */
+
+    --radius: 0.625rem;
+
+    /* Série de dados para gráficos — ver src/lib/chartTheme.ts */
+    --chart-1: 200 78% 19%;
+    --chart-2: 188 77% 34%;
+    --chart-3: 190 59% 60%;
+    --chart-4: 207 25% 62%;
+    --chart-5: 200 45% 38%;
+    --chart-6: 188 45% 78%;
+  }
+
+  /*
+   * Tema escuro: estrutura pronta, ainda não ativada.
+   * `darkMode: ["class"]` no tailwind.config.js — basta popular e adicionar
+   * a classe `dark` no <html>. Ver docs/ROADMAP-UI.md, item 6.
+   */
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  /* Números de métrica, KPI e tabela alinham por coluna. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /* Scrollbar discreta na cor do border (substitui o `scrollbar-thin` morto). */
+  .scrollbar-slim {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scrollbar-slim::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-slim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-slim::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 9999px;
+  }
+  .scrollbar-slim::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.4);
+  }
+}

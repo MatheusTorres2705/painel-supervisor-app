@@ -71,19 +71,6 @@ type Colab = {
 };
 
 /* =================== Utils =================== */
-function rangeDays(ini: string, fin: string): string[] {
-  const res: string[] = [];
-  const a = new Date(ini);
-  const b = new Date(fin);
-  for (let d = new Date(a); d <= b; d.setDate(d.getDate() + 1)) {
-    res.push(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-        d.getDate()
-      ).padStart(2, "0")}`
-    );
-  }
-  return res;
-}
 
 function toSankhyaDate(ymd: string): string {
   if (!ymd) return "";
@@ -136,7 +123,7 @@ const etapaColor: Record<Etapa, string> = {
   MON: "bg-sky-500",
   PINT: "bg-fuchsia-500",
   ELE: "bg-amber-500",
-  ACB: "bg-slate-500",
+  ACB: "bg-chart-4",
 };
 
 const etapaBadgeStyles: Record<Etapa, string> = {
@@ -144,7 +131,7 @@ const etapaBadgeStyles: Record<Etapa, string> = {
   MON: "bg-sky-100 text-sky-800 border-sky-200",
   PINT: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
   ELE: "bg-amber-100 text-amber-800 border-amber-200",
-  ACB: "bg-slate-100 text-slate-800 border-slate-200",
+  ACB: "bg-muted text-foreground border-border",
 };
 
 // deduz etapa das atividades do ERP, usando o cargo do colaborador
@@ -258,7 +245,7 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
         <button
           type="button"
           className={cn(
-            "flex w-full items-center justify-between rounded-md border bg-background px-1.5 py-1 text-[11px]",
+            "flex w-full items-center justify-between rounded-md border bg-background px-1.5 py-1 text-2xs",
             !nSel && "text-muted-foreground"
           )}
         >
@@ -269,7 +256,7 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
 
       <PopoverContent className="w-80 p-2">
         {setorAlocarLabel ? (
-          <div className="mb-2 text-[11px] text-muted-foreground">
+          <div className="mb-2 text-2xs text-muted-foreground">
             Filtrado por:{" "}
             <span className="font-medium text-foreground">{setorAlocarLabel}</span>
           </div>
@@ -299,7 +286,7 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
               >
                 <span
                   className={cn(
-                    "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
+                    "flex h-4 w-4 items-center justify-center rounded border text-2xs",
                     selected ? "bg-primary text-primary-foreground" : "bg-background"
                   )}
                 >
@@ -313,7 +300,7 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
           })}
 
           {!filtrados.length && (
-            <div className="px-2 py-1 text-[11px] text-muted-foreground">
+            <div className="px-2 py-1 text-2xs text-muted-foreground">
               Nenhum colaborador encontrado (verifique o filtro de setor).
             </div>
           )}
@@ -321,12 +308,12 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
 
         {selecionados.length > 0 && (
           <div className="mt-2 border-t pt-2">
-            <div className="mb-1 text-[11px] font-medium">Selecionados ({selecionados.length})</div>
+            <div className="mb-1 text-2xs font-medium">Selecionados ({selecionados.length})</div>
             <div className="flex flex-wrap gap-1">
               {selecionados.map((c) => (
                 <span
                   key={c.id}
-                  className="flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-[2px] text-[10px]"
+                  className="flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-[2px] text-2xs"
                 >
                   {c.id} - {c.nome}
                   <button
@@ -344,7 +331,7 @@ const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-7 px-2 text-[11px]"
+                className="h-7 px-2 text-2xs"
                 onClick={() => onChange([])}
               >
                 Limpar todos
@@ -386,7 +373,6 @@ export default function AlocacaoPage() {
 
   const [ini, setIni] = useState(defIni);
   const [fin, setFin] = useState(defFin);
-  const dias = useMemo(() => rangeDays(ini, fin), [ini, fin]); // (se quiser usar em dropdown depois)
 
   // ✅ NOVO: dia que você está “montando” o planejamento (controla Gantt + ajuda no preenchimento)
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -1085,7 +1071,7 @@ const colabsParaAlocar = colabsVisiveis;
 
   /* =================== Render =================== */
   return (
-    <div className="h-[calc(100vh-140px)] overflow-y-auto space-y-4 pr-1">
+    <div className="space-y-4">
       {/* Header / filtros */}
       <Card>
         <CardHeader>
@@ -1207,7 +1193,7 @@ const colabsParaAlocar = colabsVisiveis;
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 text-[11px]"
+                className="h-7 px-2 text-2xs"
                 onClick={aplicarDiaPlanejamentoEmLote}
                 disabled={!atividades.length}
               >
@@ -1247,7 +1233,7 @@ const colabsParaAlocar = colabsVisiveis;
             <h4 className="text-sm font-semibold">
               Demandas da OP (grade) — {toBR(ini)} a {toBR(fin)}
             </h4>
-            <Badge variant="outline" className="text-[11px]">
+            <Badge variant="outline" className="text-2xs">
               {atividadesFiltradas.length}
             </Badge>
           </div>
@@ -1256,7 +1242,7 @@ const colabsParaAlocar = colabsVisiveis;
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <div className="min-w-[980px]">
-              <div className="grid grid-cols-12 text-[11px] text-muted-foreground px-3 py-1.5 border-b bg-muted/40">
+              <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-1.5 border-b bg-muted/40">
                 <div className="col-span-4">Atividade</div>
                 <div className="col-span-2">Setor</div>
                 <div className="col-span-1 text-right">HH</div>
@@ -1282,7 +1268,7 @@ const colabsParaAlocar = colabsVisiveis;
                       </div>
 
                       <div className="col-span-2">
-                        <Badge className={cn("text-[10px] px-1 py-0", etapaBadgeStyles[a.etapa])}>
+                        <Badge className={cn("text-2xs px-1 py-0", etapaBadgeStyles[a.etapa])}>
                           {a.codusu} - {a.setor}
                         </Badge>
                       </div>
@@ -1303,7 +1289,7 @@ const colabsParaAlocar = colabsVisiveis;
                               arr.map((x) => (x.id === a.id ? { ...x, dtPlan: v } : x))
                             );
                           }}
-                          className="h-7 px-1 text-[11px]"
+                          className="h-7 px-1 text-2xs"
                         />
                       </div>
 
@@ -1325,7 +1311,7 @@ const colabsParaAlocar = colabsVisiveis;
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="text-[10px] px-1.5 h-7"
+                            className="text-2xs px-1.5 h-7"
                             onClick={() =>
                               setAtividades((arr) =>
                                 arr.map((x) => (x.id === a.id ? { ...x, alocados: [] } : x))
@@ -1356,7 +1342,7 @@ const colabsParaAlocar = colabsVisiveis;
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-semibold">Colaboradores (grade)</h4>
             {setorSelecionado !== "Todos" ? (
-              <Badge variant="secondary" className="text-[11px]">
+              <Badge variant="secondary" className="text-2xs">
                 Filtrado: {setorSelecionadoLabel}
               </Badge>
             ) : null}
@@ -1366,7 +1352,7 @@ const colabsParaAlocar = colabsVisiveis;
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <div className="min-w-[720px]">
-              <div className="grid grid-cols-12 text-[11px] text-muted-foreground px-3 py-1.5 border-b bg-muted/40">
+              <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-1.5 border-b bg-muted/40">
                 <div className="col-span-4">Colaborador</div>
                 <div className="col-span-2 text-right">Atv tela</div>
                 <div className="col-span-2 text-right">HH tela</div>
@@ -1389,7 +1375,7 @@ const colabsParaAlocar = colabsVisiveis;
 
                         <div className="min-w-0">
                           <p className="font-medium truncate">{c.nome}</p>
-                          <p className="text-[10px] text-muted-foreground truncate">
+                          <p className="text-2xs text-muted-foreground truncate">
                             {c.cargo} • Setor: {c.codSetor || "-"}
                           </p>
                         </div>
@@ -1421,7 +1407,7 @@ const colabsParaAlocar = colabsVisiveis;
             <h4 className="text-sm font-semibold">
               Gantt — {toBR(diaPlanejamento)} (07h — 17h)
             </h4>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-2xs text-muted-foreground">
               Clique em “Detalhes” para trocar colaborador no ERP.
             </span>
           </div>
@@ -1431,7 +1417,7 @@ const colabsParaAlocar = colabsVisiveis;
           <div className="overflow-x-auto">
             <div className="min-w-[880px] space-y-1">
               <div
-                className="grid items-center text-[11px] text-muted-foreground"
+                className="grid items-center text-2xs text-muted-foreground"
                 style={{ gridTemplateColumns: "220px 1fr" }}
               >
                 <div />
@@ -1472,8 +1458,8 @@ const colabsParaAlocar = colabsVisiveis;
                         </Avatar>
 
                         <div className="min-w-0">
-                          <p className="text-[11px] font-medium truncate">{c.nome}</p>
-                          <p className="text-[10px] text-muted-foreground truncate">
+                          <p className="text-2xs font-medium truncate">{c.nome}</p>
+                          <p className="text-2xs text-muted-foreground truncate">
                             {hhTotalDia.toFixed(1)}h no dia (tela + ERP)
                           </p>
                         </div>
@@ -1481,7 +1467,7 @@ const colabsParaAlocar = colabsVisiveis;
                         <Button
                           variant="outline"
                           size="sm"
-                          className="ml-auto text-[10px] px-2 py-1 h-7"
+                          className="ml-auto text-2xs px-2 py-1 h-7"
                           onClick={() => openHab(c)}
                         >
                           Detalhes
@@ -1527,7 +1513,7 @@ const colabsParaAlocar = colabsVisiveis;
                 })}
 
                 {!loading && !colabsVisiveis.length && (
-                  <div className="text-[11px] text-muted-foreground px-1 py-2">
+                  <div className="text-2xs text-muted-foreground px-1 py-2">
                     Sem colaboradores para exibir o Gantt (verifique o filtro “Setor para alocar”).
                   </div>
                 )}
@@ -1540,13 +1526,13 @@ const colabsParaAlocar = colabsVisiveis;
       {/* ✅ Modal Backlog (demandas atrasadas) */}
       <Dialog.Root open={backlogOpen} onOpenChange={setBacklogOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70" />
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/50" />
           <Dialog.Content
             className="
               fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[980px]
               -translate-x-1/2 -translate-y-1/2
-              rounded-2xl bg-white
-              border border-gray-200
+              rounded-2xl bg-card
+              border border-border
               p-4 shadow-2xl outline-none
               max-h-[90vh] overflow-y-auto
             "
@@ -1569,7 +1555,7 @@ const colabsParaAlocar = colabsVisiveis;
             </div>
 
             <div className="mt-3 rounded-2xl border overflow-hidden">
-              <div className="grid grid-cols-12 text-[11px] text-muted-foreground px-3 py-2 border-b bg-muted/40">
+              <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-2 border-b bg-muted/40">
                 <div className="col-span-5">Atividade</div>
                 <div className="col-span-2">Setor</div>
                 <div className="col-span-1 text-right">HH</div>
@@ -1585,7 +1571,7 @@ const colabsParaAlocar = colabsVisiveis;
                     </div>
 
                     <div className="col-span-2">
-                      <Badge className={cn("text-[10px] px-1 py-0", etapaBadgeStyles[a.etapa])}>
+                      <Badge className={cn("text-2xs px-1 py-0", etapaBadgeStyles[a.etapa])}>
                         {a.codusu} - {a.setor}
                       </Badge>
                     </div>
@@ -1606,13 +1592,13 @@ const colabsParaAlocar = colabsVisiveis;
                             arr.map((x) => (x.id === a.id ? { ...x, dtPlan: v } : x))
                           );
                         }}
-                        className="h-7 px-1 text-[11px]"
+                        className="h-7 px-1 text-2xs"
                       />
                       <Button
                         type="button"
                         size="sm"
                         variant="outline"
-                        className="h-7 px-2 text-[11px]"
+                        className="h-7 px-2 text-2xs"
                         onClick={() =>
                           setAtividades((arr) =>
                             arr.map((x) =>
@@ -1647,13 +1633,13 @@ const colabsParaAlocar = colabsVisiveis;
       {/* Modal Habilidades / Atividades / Planejamento ERP */}
       <Dialog.Root open={habOpen} onOpenChange={setHabOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/70" />
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/50" />
           <Dialog.Content
             className="
               fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[720px]
               -translate-x-1/2 -translate-y-1/2
-              rounded-2xl bg-white dark:bg-white
-              border border-gray-200
+              rounded-2xl bg-card 
+              border border-border
               p-4 shadow-2xl outline-none
               max-h-[90vh] overflow-y-auto
             "
@@ -1708,7 +1694,7 @@ const colabsParaAlocar = colabsVisiveis;
                             <div key={a.id} className="grid grid-cols-12 items-center px-3 py-2 gap-2 text-xs">
                               <div className="col-span-6">{a.nome}</div>
                               <div className="col-span-2">
-                                <Badge className={cn("text-[10px] px-1 py-0", etapaBadgeStyles[a.etapa])}>
+                                <Badge className={cn("text-2xs px-1 py-0", etapaBadgeStyles[a.etapa])}>
                                   {a.etapa}
                                 </Badge>
                               </div>
@@ -1755,7 +1741,7 @@ const colabsParaAlocar = colabsVisiveis;
                         <div className="col-span-2 text-right">{p.qtd}</div>
                         <div className="col-span-3">
                           <select
-                            className="w-full rounded-md border bg-background px-2 py-1 text-[11px]"
+                            className="w-full rounded-md border bg-background px-2 py-1 text-2xs"
                             value={novoDestinoPorSeq[p.seq] ?? ""}
                             onChange={(e) =>
                               setNovoDestinoPorSeq((prev) => ({
@@ -1778,7 +1764,7 @@ const colabsParaAlocar = colabsVisiveis;
                         <div className="col-span-1 text-right">
                           <Button
                             size="sm"
-                            className="text-[10px] px-2 h-7"
+                            className="text-2xs px-2 h-7"
                             variant="outline"
                             disabled={loadingSeq === p.seq}
                             onClick={() => handleTrocarFuncionarioErpItem(p)}

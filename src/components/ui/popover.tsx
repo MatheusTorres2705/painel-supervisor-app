@@ -20,10 +20,9 @@ const PopoverContent = React.forwardRef<
       sideOffset={sideOffset}
       className={cn(
         // layout / aparência base
-        "z-50 w-72 rounded-md border border-gray-200",
-        "bg-white dark:bg-white",            // <- fundo BRANCO sempre
-        "text-slate-900 dark:text-slate-900",// <- texto escuro sempre
-        "p-4 shadow-xl outline-none",
+        "z-50 w-72 rounded-md border border-border",
+        "bg-popover text-popover-foreground",
+        "p-4 shadow-overlay outline-none",
 
         // animações radix
         "data-[state=open]:animate-in data-[state=closed]:animate-out",

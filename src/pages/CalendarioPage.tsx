@@ -1,5 +1,5 @@
 // src/pages/CalendarioPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -478,7 +478,7 @@ export default function CalendarioPage() {
                       {list.slice(0, 3).map((x) => (
                         <div
                           key={`${x.nunota}-${x.sequencia}-${x.codprod}`}
-                          className="rounded-lg border px-2 py-1 text-[11px] hover:bg-muted cursor-pointer"
+                          className="rounded-lg border px-2 py-1 text-2xs hover:bg-muted cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation();
                             openDialog(x);
@@ -494,7 +494,7 @@ export default function CalendarioPage() {
                         </div>
                       ))}
                       {count > 3 && (
-                        <div className="text-[11px] text-muted-foreground">+{count - 3} mais…</div>
+                        <div className="text-2xs text-muted-foreground">+{count - 3} mais…</div>
                       )}
                     </div>
                   </button>
@@ -540,10 +540,10 @@ export default function CalendarioPage() {
                             }}
                             title={`Chassi: ${x.chassi}\nProduto: ${x.descrprod}`}
                           >
-                            <div className="text-[11px] font-medium truncate">
+                            <div className="text-2xs font-medium truncate">
                               Chassi: {x.chassi}
                             </div>
-                            <div className="text-[11px] text-muted-foreground truncate">
+                            <div className="text-2xs text-muted-foreground truncate">
                               Produto: {x.descrprod}
                             </div>
                           </button>
@@ -639,8 +639,8 @@ export default function CalendarioPage() {
       {/* Dialog detalhe */}
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[780px] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-4 shadow-2xl outline-none">
+          <Dialog.Overlay className="fixed inset-0 bg-foreground/50 backdrop-blur-sm z-50" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[780px] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-card p-4 shadow-2xl outline-none">
             <div className="flex items-start justify-between border-b pb-3">
               <div>
                 <Dialog.Title className="text-base font-semibold">Detalhe do agendamento</Dialog.Title>

@@ -1,14 +1,6 @@
 import * as React from "react"
 
-// Lightweight className utility as a fallback for missing "@/lib/utils"
-const cn = (...classes: Array<string | Record<string, boolean> | undefined | null | false>) =>
-  classes
-    .flatMap((c) => {
-      if (!c) return [];
-      if (typeof c === "string") return c.split(" ");
-      return Object.keys(c).filter((k) => (c as Record<string, boolean>)[k]);
-    })
-    .join(" ");
+import { cn } from "@/lib/utils"
 
 const Card = React.forwardRef<
   HTMLDivElement,
@@ -17,7 +9,7 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-xl border bg-card text-card-foreground shadow",
+      "rounded-xl border border-border bg-card text-card-foreground shadow-card",
       className
     )}
     {...props}

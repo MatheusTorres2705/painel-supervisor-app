@@ -1,5 +1,5 @@
 // src/pages/PiramidePage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { obterReg } from "@/lib/obterReg";
 
 import {
@@ -148,24 +148,24 @@ function NineBoxDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/50" />
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-[60]
             w-[92vw] max-w-[720px]
             -translate-x-1/2 -translate-y-1/2
-            rounded-2xl bg-white text-slate-900
-            border border-slate-200 p-4 shadow-2xl outline-none
+            rounded-2xl bg-card text-foreground
+            border border-border p-4 shadow-2xl outline-none
             max-h-[90vh] overflow-y-auto
           "
         >
-          <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+          <div className="flex items-start justify-between gap-4 border-b border-border pb-3">
             <div>
               <Dialog.Title className="text-base font-semibold flex items-center gap-2">
                 <Grid3X3 className="h-4 w-4" />
                 9 Box • {codfunc} - {nome ?? ""}
               </Dialog.Title>
-              <Dialog.Description className="text-xs text-slate-600 mt-1">
+              <Dialog.Description className="text-xs text-muted-foreground mt-1">
                 Selecione a célula (Potencial x Performance) e salve.
               </Dialog.Description>
             </div>
@@ -186,14 +186,14 @@ function NineBoxDialog({
                   onClick={() => setSelected(c)}
                   className={`rounded-xl border p-3 text-left transition ${
                     active
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-200 hover:bg-slate-50"
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border hover:bg-muted"
                   }`}
                 >
                   <div className="text-xs font-semibold">{c}</div>
                   <div
-                    className={`mt-2 inline-flex rounded-md border px-2 py-1 text-[10px] ${
-                      active ? "border-white/30" : "border-slate-200"
+                    className={`mt-2 inline-flex rounded-md border px-2 py-1 text-2xs ${
+                      active ? "border-primary-foreground/30" : "border-border"
                     }`}
                   >
                     Potencial/Performance
@@ -498,7 +498,7 @@ export default function PiramidePage() {
   }, [coddepSel, deptos]);
 
   return (
-    <div className="p-5 space-y-4">
+    <div className="space-y-4">
       <div className="flex flex-col gap-1">
         <h1 className="text-lg font-semibold">Pirâmide</h1>
         <p className="text-[12px] text-muted-foreground">
@@ -527,9 +527,9 @@ export default function PiramidePage() {
                     <Building2 className="h-4 w-4" /> Departamento
                   </p>
                   {deptoLoading ? (
-                    <span className="text-[11px] text-muted-foreground">Carregando…</span>
+                    <span className="text-2xs text-muted-foreground">Carregando…</span>
                   ) : (
-                    <Badge variant="outline" className="text-[11px]">
+                    <Badge variant="outline" className="text-2xs">
                       {deptos.length} opção(ões)
                     </Badge>
                   )}
@@ -538,9 +538,9 @@ export default function PiramidePage() {
                 <select
                   className="
                     mt-2 w-full rounded-md
-                    border border-slate-200 bg-white
+                    border border-border bg-card
                     px-3 py-2 text-sm
-                    focus:outline-none focus:ring-2 focus:ring-slate-300
+                    focus:outline-none focus:ring-2 focus:ring-ring
                   "
                   value={coddepSel ?? ""}
                   onChange={(e) => {
@@ -558,7 +558,7 @@ export default function PiramidePage() {
                   ))}
                 </select>
 
-                <p className="mt-2 text-[11px] text-muted-foreground">
+                <p className="mt-2 text-2xs text-muted-foreground">
                   Ao escolher um departamento, filtramos por <b>DEP.CODDEP</b>.
                 </p>
               </div>
@@ -566,7 +566,7 @@ export default function PiramidePage() {
               <div className="rounded-xl border bg-background p-3 flex items-start justify-between">
                 <div>
                   <p className="text-xs font-semibold">Ações</p>
-                  <p className="text-[11px] text-muted-foreground mt-1">
+                  <p className="text-2xs text-muted-foreground mt-1">
                     Atualiza resumo + tabela do nível selecionado.
                   </p>
                 </div>
@@ -595,11 +595,11 @@ export default function PiramidePage() {
         <Card className="bg-card border">
           <CardContent className="p-4 flex items-start justify-between">
             <div>
-              <p className="text-[11px] text-muted-foreground">Total (ativos)</p>
+              <p className="text-2xs text-muted-foreground">Total (ativos)</p>
               <p className="text-3xl font-semibold leading-none mt-1">
                 {resumoLoading ? "…" : total}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-2">FUN.SITUACAO = '1'</p>
+              <p className="text-2xs text-muted-foreground mt-2">FUN.SITUACAO = '1'</p>
             </div>
             <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
               <Users className="h-4 w-4" />
@@ -610,9 +610,9 @@ export default function PiramidePage() {
         <Card className="bg-card border">
           <CardContent className="p-4 flex items-start justify-between">
             <div>
-              <p className="text-[11px] text-muted-foreground">Nível selecionado</p>
+              <p className="text-2xs text-muted-foreground">Nível selecionado</p>
               <p className="text-2xl font-semibold leading-none mt-2">{nivelAtivo || "-"}</p>
-              <p className="text-[11px] text-muted-foreground mt-2">
+              <p className="text-2xs text-muted-foreground mt-2">
                 {resumoNivel.qtd} colaborador(es)
               </p>
             </div>
@@ -625,11 +625,11 @@ export default function PiramidePage() {
         <Card className="bg-card border">
           <CardContent className="p-4 flex items-start justify-between">
             <div>
-              <p className="text-[11px] text-muted-foreground">Elegíveis (mock)</p>
+              <p className="text-2xs text-muted-foreground">Elegíveis (mock)</p>
               <p className="text-3xl font-semibold leading-none mt-1">
                 {colabsLoading ? "…" : resumoNivel.elegiveis}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-2">Regra: rank ≤ 3</p>
+              <p className="text-2xs text-muted-foreground mt-2">Regra: rank ≤ 3</p>
             </div>
             <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
               <AlertTriangle className="h-4 w-4" />
@@ -646,7 +646,7 @@ export default function PiramidePage() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm font-semibold">Distribuição por nível</p>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   Clique no nível para filtrar a tabela.
                 </p>
               </div>
@@ -716,7 +716,7 @@ export default function PiramidePage() {
                 <p className="text-sm font-semibold">
                   Colaboradores • {nivelAtivo || "-"}
                 </p>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   Filtrado por departamento • 9-box salva no localStorage.
                 </p>
               </div>
@@ -732,7 +732,7 @@ export default function PiramidePage() {
                   />
                 </div>
 
-                <Badge variant="outline" className="text-[11px]">
+                <Badge variant="outline" className="text-2xs">
                   {tabela.length} item(ns)
                 </Badge>
               </div>
@@ -748,7 +748,7 @@ export default function PiramidePage() {
               </div>
             ) : (
               <div className="rounded-xl border bg-background overflow-hidden">
-                <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[11px] text-muted-foreground border-b">
+                <div className="grid grid-cols-12 gap-2 px-3 py-2 text-2xs text-muted-foreground border-b">
                   <div className="col-span-1">Rank</div>
                   <div className="col-span-5">Colaborador</div>
                   <div className="col-span-2">Nível</div>
@@ -760,7 +760,7 @@ export default function PiramidePage() {
                   {tabela.map((c) => (
                     <div key={c.CODFUNC} className="grid grid-cols-12 gap-2 px-3 py-3 items-start">
                       <div className="col-span-1">
-                        <Badge variant="outline" className="text-[11px]">
+                        <Badge variant="outline" className="text-2xs">
                           {c.rank}
                         </Badge>
                       </div>
@@ -770,20 +770,20 @@ export default function PiramidePage() {
                           {c.CODFUNC} - {c.NOMEFUNC}
                         </div>
                         <div className="mt-2 flex flex-wrap gap-2">
-                          <Badge variant="outline" className={`text-[10px] ${toneNineBox(c.nineBox)}`}>
+                          <Badge variant="outline" className={`text-2xs ${toneNineBox(c.nineBox)}`}>
                             9 box: {c.nineBox ?? "—"}
                           </Badge>
                         </div>
                       </div>
 
                       <div className="col-span-2">
-                        <Badge variant="outline" className="text-[11px]">
+                        <Badge variant="outline" className="text-2xs">
                           {c.AD_NIVEL}
                         </Badge>
                       </div>
 
                       <div className="col-span-2">
-                        <Badge variant="outline" className={`text-[11px] ${toneEligible(c.elegivel)}`}>
+                        <Badge variant="outline" className={`text-2xs ${toneEligible(c.elegivel)}`}>
                           {c.elegivel ? (
                             <span className="inline-flex items-center gap-1">
                               <CheckCircle2 className="h-3 w-3" /> Sim

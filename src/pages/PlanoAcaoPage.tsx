@@ -246,8 +246,8 @@ export default function PlanoAcaoPage() {
                   </Button>
                 </Dialog.Trigger>
                 <Dialog.Portal>
-                  <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
-                  <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[720px] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-4 shadow-2xl outline-none">
+                  <Dialog.Overlay className="fixed inset-0 bg-foreground/50 backdrop-blur-sm z-50" />
+                  <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[720px] -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-card p-4 shadow-2xl outline-none">
                     <div className="flex items-start justify-between border-b pb-3">
                       <Dialog.Title className="text-base font-semibold">Novo plano de ação</Dialog.Title>
                       <Dialog.Close asChild>
@@ -497,7 +497,7 @@ function PlanoCard({
       <CardContent className="space-y-3">
         <div className="grid grid-cols-12 gap-2">
           <div className="col-span-7">
-            <label className="text-[10px] text-muted-foreground">Responsável</label>
+            <label className="text-2xs text-muted-foreground">Responsável</label>
             <Input
               value={plano.responsavel ?? ""}
               onChange={(e) => onUpdate({ responsavel: e.target.value || undefined })}
@@ -505,19 +505,19 @@ function PlanoCard({
             />
           </div>
           <div className="col-span-5">
-            <label className="text-[10px] text-muted-foreground">Prazo</label>
+            <label className="text-2xs text-muted-foreground">Prazo</label>
             <Input
               type="date"
               value={plano.prazo ?? ""}
               onChange={(e) => onUpdate({ prazo: e.target.value || undefined })}
             />
-            {vencido && <p className="mt-1 text-[10px] text-red-600">Prazo vencido ({toBR(plano.prazo)})</p>}
+            {vencido && <p className="mt-1 text-2xs text-red-600">Prazo vencido ({toBR(plano.prazo)})</p>}
           </div>
         </div>
 
         {plano.descricao !== undefined && (
           <div>
-            <label className="text-[10px] text-muted-foreground">Descrição</label>
+            <label className="text-2xs text-muted-foreground">Descrição</label>
             <textarea
               className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm min-h-[70px]"
               value={plano.descricao}
@@ -527,7 +527,7 @@ function PlanoCard({
         )}
 
         <div className="flex items-center justify-between">
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-2xs text-muted-foreground">
             {plano.prazo ? `Prazo: ${toBR(plano.prazo)}` : "Sem prazo"}
           </div>
           <div className="flex items-center gap-2">

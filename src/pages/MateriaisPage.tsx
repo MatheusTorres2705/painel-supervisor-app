@@ -1,5 +1,5 @@
 // src/pages/MateriaisPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -475,7 +475,7 @@ export default function MateriaisPage() {
           <CardHeader className="py-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold">1) Setores pendentes</h4>
-              <Badge variant="outline" className="text-[11px]">
+              <Badge variant="outline" className="text-2xs">
                 {setoresFiltrados.length}
               </Badge>
             </div>
@@ -489,7 +489,7 @@ export default function MateriaisPage() {
             />
 
             <div className="rounded-2xl border overflow-hidden">
-              <div className="grid grid-cols-12 text-[11px] text-muted-foreground px-3 py-2 border-b bg-muted/40">
+              <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-2 border-b bg-muted/40">
                 <div className="col-span-3">Código</div>
                 <div className="col-span-9">Setor</div>
               </div>
@@ -531,7 +531,7 @@ export default function MateriaisPage() {
           <CardHeader className="py-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold">2) Chassis / Ordens de Produção</h4>
-              <Badge variant="outline" className="text-[11px]">
+              <Badge variant="outline" className="text-2xs">
                 {chassisFiltrados.length}
               </Badge>
             </div>
@@ -554,7 +554,7 @@ export default function MateriaisPage() {
             />
 
             <div className="rounded-2xl border overflow-hidden">
-              <div className="grid grid-cols-12 text-[11px] text-muted-foreground px-3 py-2 border-b bg-muted/40">
+              <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-2 border-b bg-muted/40">
                 <div className="col-span-3">Chassi</div>
                 <div className="col-span-2">NUNOTA</div>
                 <div className="col-span-2">DTNEG</div>
@@ -619,8 +619,8 @@ export default function MateriaisPage() {
           }
         }}
       >
-        <SheetContent side="right" size="xl" className="bg-white">
-          <SheetHeader className="bg-white border-b">
+        <SheetContent side="right" size="xl" className="bg-card">
+          <SheetHeader className="bg-card border-b">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <SheetTitle>
@@ -632,20 +632,20 @@ export default function MateriaisPage() {
                 </p>
 
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                  <Badge className={cn("text-[11px] px-2", "bg-amber-100 text-amber-900 border-amber-200")}>
+                  <Badge className={cn("text-2xs px-2", "bg-amber-100 text-amber-900 border-amber-200")}>
                     Pendentes: {counts.pend}
                   </Badge>
-                  <Badge className={cn("text-[11px] px-2", "bg-sky-100 text-sky-800 border-sky-200")}>
+                  <Badge className={cn("text-2xs px-2", "bg-sky-100 text-sky-800 border-sky-200")}>
                     Planejados: {counts.plan}
                   </Badge>
-                  <Badge className={cn("text-[11px] px-2", "bg-emerald-100 text-emerald-800 border-emerald-200")}>
+                  <Badge className={cn("text-2xs px-2", "bg-emerald-100 text-emerald-800 border-emerald-200")}>
                     Entregues: {counts.entr}
                   </Badge>
-                  <Badge variant="outline" className="text-[11px]">
+                  <Badge variant="outline" className="text-2xs">
                     Total: {counts.total}
                   </Badge>
                   {dirtyCount > 0 && (
-                    <Badge variant="destructive" className="text-[11px]">
+                    <Badge variant="destructive" className="text-2xs">
                       Alterações: {dirtyCount}
                     </Badge>
                   )}
@@ -683,7 +683,7 @@ export default function MateriaisPage() {
             </div>
           </SheetHeader>
 
-          <div className="p-4 space-y-3 bg-white h-[calc(100%-64px)] overflow-auto">
+          <div className="p-4 space-y-3 bg-card h-[calc(100%-64px)] overflow-auto">
             {/* Filtros + Bulk */}
             <Card>
               <CardContent className="p-3 space-y-3">
@@ -785,7 +785,7 @@ export default function MateriaisPage() {
               <CardHeader className="py-3">
                 <div className="flex items-center justify-between">
                   <h4 className="text-sm font-semibold">Materiais disponíveis para agendamento</h4>
-                  <Badge variant="outline" className="text-[11px]">
+                  <Badge variant="outline" className="text-2xs">
                     {materiaisFiltrados.length}
                   </Badge>
                 </div>
@@ -794,7 +794,7 @@ export default function MateriaisPage() {
               <CardContent className="p-0">
                 <div className="overflow-x-auto">
                   <div className="min-w-[980px]">
-                    <div className="grid grid-cols-12 text-[11px] text-muted-foreground px-3 py-2 border-b bg-muted/40">
+                    <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-2 border-b bg-muted/40">
                       <div className="col-span-1">Seq</div>
                       <div className="col-span-2">CODPROD</div>
                       <div className="col-span-4">Produto</div>
@@ -829,14 +829,14 @@ export default function MateriaisPage() {
                                 <div className="font-medium truncate" title={m.descrProd}>
                                   {m.descrProd}
                                 </div>
-                                <div className="text-[11px] text-muted-foreground">
+                                <div className="text-2xs text-muted-foreground">
                                   NUNOTA {m.nunota} • DTNEG {toBR(m.dtNeg)}
                                   {m.adDtEntrega ? ` • Entregue em ${toBR(m.adDtEntrega)}` : ""}
                                 </div>
                               </div>
 
                               <div className="col-span-2">
-                                <Badge className={cn("text-[11px] px-2", badgeStatus(m.status))}>
+                                <Badge className={cn("text-2xs px-2", badgeStatus(m.status))}>
                                   {m.status}
                                 </Badge>
                               </div>

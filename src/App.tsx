@@ -1,156 +1,64 @@
 // src/App.tsx
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
 import { AuthProvider } from "@/auth/AuthProvider";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { AppShell } from "@/components/layout/AppShell";
+import { ToastProvider } from "@/components/ui/toast";
+
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
 import EquipePage from "@/pages/EquipePage";
-import PiramidePage from "@/pages/PiramidePage";
-
-// import AtividadesPage from "@/pages/AtividadesPage";
-// import AlocacaoPage from "@/pages/AlocacaoPage";
-// import MateriaisPage from "@/pages/MateriaisPage";
-// import CalendarioPage from "@/pages/CalendarioPage";
-// import PlanoAcaoPage from "@/pages/PlanoAcaoPage";
-import { Layout } from "@/components/ui/Layout"; // ✅ caminho correto
-import AtividadesPage from "./pages/AtividadesPage";
-import AlocacaoPage from "./pages/AlocacaoPage";
-import MateriaisPage from "./pages/MateriaisPage";
-import CalendarioPage from "./pages/CalendarioPage";
-import PlanoAcaoPage from "./pages/PlanoAcaoPage";
 import FuncionarioDetalhePage from "@/pages/FuncionarioDetalhePage";
-import HoraExtraPage from "./pages/HoraExtraPage";
-
+import PiramidePage from "@/pages/PiramidePage";
+import AtividadesPage from "@/pages/AtividadesPage";
+import AlocacaoPage from "@/pages/AlocacaoPage";
+import MateriaisPage from "@/pages/MateriaisPage";
+import CalendarioPage from "@/pages/CalendarioPage";
+import HoraExtraPage from "@/pages/HoraExtraPage";
+import PlanoAcaoPage from "@/pages/PlanoAcaoPage";
 
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          {/* pública */}
-          <Route path="/login" element={<LoginPage />} />
+      <ToastProvider>
+        <BrowserRouter>
+          <Routes>
+            {/* Pública */}
+            <Route path="/login" element={<LoginPage />} />
 
-          {/* protegidas */}
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <DashboardPage />
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/equipe"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <EquipePage />
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/atividades"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <AtividadesPage />
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/atividades/alocacao/:opId"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <AlocacaoPage />
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/materiais"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <MateriaisPage />
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/calendario"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <CalendarioPage />
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/plano-acao"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <PlanoAcaoPage />
-                  
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/piramide" 
-          element={
-              <ProtectedRoute>
-                <Layout>
-                  <PiramidePage />
-                  
-                </Layout>
-              </ProtectedRoute>
-            }
-          
-          // element={<PiramidePage />} 
-          />
+            {/*
+              Rota de layout: o par ProtectedRoute + shell era repetido
+              9 vezes. Agora as filhas renderizam dentro do <Outlet/>.
+            */}
+            <Route
+              element={
+                <ProtectedRoute>
+                  <AppShell />
+                </ProtectedRoute>
+              }
+            >
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/equipe" element={<EquipePage />} />
+              <Route path="/equipe/:codfunc" element={<FuncionarioDetalhePage />} />
+              <Route path="/piramide" element={<PiramidePage />} />
+              <Route path="/atividades" element={<AtividadesPage />} />
+              <Route
+                path="/atividades/alocacao/:opId"
+                element={<AlocacaoPage />}
+              />
+              <Route path="/materiais" element={<MateriaisPage />} />
+              <Route path="/calendario" element={<CalendarioPage />} />
+              <Route path="/hora-extra" element={<HoraExtraPage />} />
+              <Route path="/plano-acao" element={<PlanoAcaoPage />} />
+            </Route>
 
-           <Route
-            path="/hora-extra"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <HoraExtraPage />
-                  
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-
-          {/* redirects */}
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          <Route
-  path="/equipe/:codfunc"
-  element={
-    <ProtectedRoute>
-      <Layout>
-        <FuncionarioDetalhePage />
-      </Layout>
-    </ProtectedRoute>
-  }
-/>
-        </Routes>
-      </BrowserRouter>
+            {/* Redirects — o catch-all vem por último. */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
     </AuthProvider>
   );
 }
-
-
-
-/*  
-filtrar o turnos na alocacao ( noturno / diurno )
-filtrar o colaborador na alocacao ( fintrar por nome e setor )
-
-
-*/

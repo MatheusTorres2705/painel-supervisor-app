@@ -299,7 +299,7 @@ function PageHeader({
             {tab === "anotacoes" && "Anotações"}
           </h1>
         </div>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           {membro?.nome ? `Você está visualizando ${membro.nome}.` : ""}
         </p>
       </div>
@@ -384,25 +384,25 @@ function NovaAvaliacaoDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/50" />
 
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-[60]
             w-[92vw] max-w-[980px]
             -translate-x-1/2 -translate-y-1/2
-            rounded-2xl bg-white text-slate-900
-            opacity-100 border border-slate-200
+            rounded-2xl bg-card text-foreground
+            opacity-100 border border-border
             p-4 shadow-2xl outline-none
             max-h-[90vh] overflow-y-auto
           "
         >
-          <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+          <div className="flex items-start justify-between gap-4 border-b border-border pb-3">
             <div>
               <Dialog.Title className="text-base font-semibold">
                 Nova avaliação comportamental
               </Dialog.Title>
-              <Dialog.Description className="text-xs text-slate-600">
+              <Dialog.Description className="text-xs text-muted-foreground">
                 Selecione uma nota de <strong>1 a 5</strong> para cada critério •
                 DTREF = <strong>{checkinAno}</strong>
               </Dialog.Description>
@@ -417,13 +417,13 @@ function NovaAvaliacaoDialog({
 
           <div className="mt-4">
             {criteriosLoading ? (
-              <div className="py-6 text-sm text-slate-600">
+              <div className="py-6 text-sm text-muted-foreground">
                 Carregando critérios…
               </div>
             ) : criteriosErro ? (
               <div className="py-6 text-sm text-red-600">{criteriosErro}</div>
             ) : !criterios.length ? (
-              <div className="py-6 text-sm text-slate-600">Nenhum critério.</div>
+              <div className="py-6 text-sm text-muted-foreground">Nenhum critério.</div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {criterios.map((c) => {
@@ -431,7 +431,7 @@ function NovaAvaliacaoDialog({
                   return (
                     <div
                       key={c.cod}
-                      className="rounded-xl border border-slate-200 bg-white p-3"
+                      className="rounded-xl border border-border bg-card p-3"
                     >
                       <p className="text-sm font-semibold whitespace-normal break-words">
                         {c.cod} - {c.descr}
@@ -440,10 +440,10 @@ function NovaAvaliacaoDialog({
                       <select
                         className="
                           mt-3 w-full rounded-md
-                          border border-slate-200
-                          bg-white text-slate-900
+                          border border-border
+                          bg-card text-foreground
                           px-3 py-2 text-xs
-                          focus:outline-none focus:ring-2 focus:ring-slate-300
+                          focus:outline-none focus:ring-2 focus:ring-ring
                         "
                         value={v}
                         onChange={(e) => {
@@ -519,26 +519,26 @@ function NovaOcorrenciaDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/50" />
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-[60]
             w-[92vw] max-w-[780px]
             -translate-x-1/2 -translate-y-1/2
             rounded-2xl
-            bg-white
-            text-slate-900
-            border border-slate-200
+            bg-card
+            text-foreground
+            border border-border
             p-4 shadow-2xl outline-none
             max-h-[90vh] overflow-y-auto
           "
         >
-          <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-3">
+          <div className="flex items-start justify-between gap-4 border-b border-border pb-3">
             <div>
               <Dialog.Title className="text-base font-semibold">
                 Nova ocorrência
               </Dialog.Title>
-              <Dialog.Description className="text-xs text-slate-600">
+              <Dialog.Description className="text-xs text-muted-foreground">
                 Registro local (mock). Em breve vamos integrar ao Sankhya.
               </Dialog.Description>
             </div>
@@ -551,14 +551,14 @@ function NovaOcorrenciaDialog({
           </div>
 
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="rounded-xl border border-border bg-card p-3">
               <p className="text-xs font-semibold">Tipo</p>
               <select
                 className="
                   mt-2 w-full rounded-md
-                  border border-slate-200 bg-white
+                  border border-border bg-card
                   px-3 py-2 text-sm
-                  focus:outline-none focus:ring-2 focus:ring-slate-300
+                  focus:outline-none focus:ring-2 focus:ring-ring
                 "
                 value={tipo}
                 onChange={(e) => setTipo(e.target.value as OcorrenciaTipo)}
@@ -570,7 +570,7 @@ function NovaOcorrenciaDialog({
               </select>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="rounded-xl border border-border bg-card p-3">
               <p className="text-xs font-semibold">Data</p>
               <Input
                 type="date"
@@ -580,7 +580,7 @@ function NovaOcorrenciaDialog({
               />
             </div>
 
-            <div className="md:col-span-2 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="md:col-span-2 rounded-xl border border-border bg-card p-3">
               <p className="text-xs font-semibold">Observação</p>
               <textarea
                 value={obs}
@@ -589,26 +589,26 @@ function NovaOcorrenciaDialog({
                 placeholder="Descreva a solicitação / ocorrência (advertência, ajuste de ponto, atestado, etc.)…"
                 className="
                   mt-2 w-full rounded-md
-                  border border-slate-200 bg-white
+                  border border-border bg-card
                   px-3 py-2 text-sm
-                  focus:outline-none focus:ring-2 focus:ring-slate-300
+                  focus:outline-none focus:ring-2 focus:ring-ring
                 "
               />
-              <p className="mt-2 text-[11px] text-slate-600">
+              <p className="mt-2 text-2xs text-muted-foreground">
                 Dica: seja objetivo e inclua referências de datas/horários quando for
                 ajuste de ponto.
               </p>
             </div>
 
-            <div className="md:col-span-2 rounded-xl border border-slate-200 bg-white p-3">
+            <div className="md:col-span-2 rounded-xl border border-border bg-card p-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold">Anexo</p>
-                  <p className="text-[11px] text-slate-600">
+                  <p className="text-2xs text-muted-foreground">
                     Por enquanto, só salvamos metadados do arquivo (nome/tamanho/tipo).
                   </p>
                 </div>
-                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100">
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
                   <Paperclip className="h-4 w-4" />
                 </span>
               </div>
@@ -624,11 +624,11 @@ function NovaOcorrenciaDialog({
                 />
 
                 {file ? (
-                  <div className="text-xs text-slate-700">
+                  <div className="text-xs text-foreground">
                     <b>{file.name}</b> • {fmtBytes(file.size)} • {file.type || "—"}
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-muted-foreground">
                     Nenhum arquivo selecionado.
                   </div>
                 )}
@@ -1353,7 +1353,7 @@ export default function FuncionarioDetalhePage() {
   const currentTabConfig = tabs.find((t) => t.key === tab) ?? tabs[0];
 
   return (
-    <div className="h-[calc(100vh-80px)] w-full bg-background text-foreground flex rounded-xl border overflow-hidden">
+    <div className="flex min-h-[70vh] w-full overflow-hidden rounded-xl border border-border bg-card text-foreground">
       {/* Sidebar */}
       <aside className="w-64 border-r bg-muted/40 flex flex-col">
         <div className="flex items-center justify-between px-4 pt-4 pb-2">
@@ -1365,7 +1365,7 @@ export default function FuncionarioDetalhePage() {
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-2xs text-muted-foreground">
             Detalhes do colaborador
           </span>
         </div>
@@ -1398,11 +1398,11 @@ export default function FuncionarioDetalhePage() {
                   {membro?.codfunc + " - " + membro?.nome ||
                     (loading ? "Carregando..." : "Não informado")}
                 </p>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   {membro?.cargo || "Função não informada"}
                 </p>
                 {membro && (
-                  <Badge variant="outline" className="text-[10px]">
+                  <Badge variant="outline" className="text-2xs">
                     {membro.senior} • {membro.depto}
                   </Badge>
                 )}
@@ -1439,7 +1439,7 @@ export default function FuncionarioDetalhePage() {
         </nav>
 
         <div className="mt-auto px-4 pb-4">
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Supervisor de Produção • NX Boats
           </p>
         </div>
@@ -1472,18 +1472,18 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           Atingimento geral (média)
                         </p>
                         <div className="mt-1 flex items-end gap-2">
                           <p className="text-3xl font-semibold leading-none">
                             {metas.length ? `${atingimentoMetas}%` : "-"}
                           </p>
-                          <Badge variant="outline" className={`text-[10px] ${badgeToneClass}`}>
+                          <Badge variant="outline" className={`text-2xs ${badgeToneClass}`}>
                             {statusAtingimento.label}
                           </Badge>
                         </div>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
+                        <p className="mt-1 text-2xs text-muted-foreground">
                           Ponderado pelo peso das metas
                         </p>
                       </div>
@@ -1494,7 +1494,7 @@ export default function FuncionarioDetalhePage() {
                     </div>
 
                     <div className="mt-3">
-                      <div className="flex items-center justify-between text-[11px]">
+                      <div className="flex items-center justify-between text-2xs">
                         <span className="text-muted-foreground">Progresso</span>
                         <span className="font-medium">
                           {metas.length ? `${atingimentoMetas}%` : "-"}
@@ -1509,9 +1509,9 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] text-muted-foreground">Total de metas</p>
+                        <p className="text-2xs text-muted-foreground">Total de metas</p>
                         <p className="mt-1 text-3xl font-semibold leading-none">{metasResumo.total}</p>
-                        <p className="mt-2 text-[11px] text-muted-foreground">
+                        <p className="mt-2 text-2xs text-muted-foreground">
                           Metas apresentadas no período
                         </p>
                       </div>
@@ -1526,11 +1526,11 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] text-muted-foreground">Concluídas</p>
+                        <p className="text-2xs text-muted-foreground">Concluídas</p>
                         <p className="mt-1 text-3xl font-semibold leading-none">
                           {metasResumo.concluidas}
                         </p>
-                        <p className="mt-2 text-[11px] text-muted-foreground">Atingimento ≥ 100%</p>
+                        <p className="mt-2 text-2xs text-muted-foreground">Atingimento ≥ 100%</p>
                       </div>
                       <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted">
                         <CheckCircle2 className="h-4 w-4 text-foreground" />
@@ -1543,9 +1543,9 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] text-muted-foreground">Abaixo do esperado</p>
+                        <p className="text-2xs text-muted-foreground">Abaixo do esperado</p>
                         <p className="mt-1 text-3xl font-semibold leading-none">{metasResumo.abaixo}</p>
-                        <p className="mt-2 text-[11px] text-muted-foreground">
+                        <p className="mt-2 text-2xs text-muted-foreground">
                           Metas com status de atenção
                         </p>
                       </div>
@@ -1575,12 +1575,12 @@ export default function FuncionarioDetalhePage() {
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-sm font-semibold">{m.titulo}</p>
-                            <p className="text-[11px] text-muted-foreground mt-1">
+                            <p className="text-2xs text-muted-foreground mt-1">
                               Peso: <span className="font-medium">{m.peso}</span>
                             </p>
                           </div>
                           <Badge
-                            className={`text-[10px] border ${
+                            className={`text-2xs border ${
                               m.status === "Abaixo do esperado"
                                 ? "bg-amber-50 text-amber-800 border-amber-200"
                                 : m.status === "Acima do esperado"
@@ -1594,12 +1594,12 @@ export default function FuncionarioDetalhePage() {
                         </div>
                       </CardHeader>
                       <CardContent className="pt-0 pb-3 space-y-1.5">
-                        <div className="flex items-center justify-between text-[11px]">
+                        <div className="flex items-center justify-between text-2xs">
                           <span>Atingimento acumulado</span>
                           <span className="font-medium">{m.atingimento}%</span>
                         </div>
                         <Progress value={m.atingimento} className="h-2" />
-                        <p className="text-[11px] text-muted-foreground mt-1">{m.status}</p>
+                        <p className="text-2xs text-muted-foreground mt-1">{m.status}</p>
                       </CardContent>
                     </Card>
                   ))
@@ -1617,7 +1617,7 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] text-muted-foreground">Referência (DTREF)</p>
+                        <p className="text-2xs text-muted-foreground">Referência (DTREF)</p>
                         <div className="mt-2 flex items-center gap-2">
                           <Input
                             value={checkinAno}
@@ -1625,11 +1625,11 @@ export default function FuncionarioDetalhePage() {
                             className="h-9 w-28 text-sm"
                             placeholder="YYYY"
                           />
-                          <Badge variant="outline" className="text-[10px]">
+                          <Badge variant="outline" className="text-2xs">
                             Ano
                           </Badge>
                         </div>
-                        <p className="mt-2 text-[11px] text-muted-foreground">
+                        <p className="mt-2 text-2xs text-muted-foreground">
                           Clique em “Atualizar”.
                         </p>
                       </div>
@@ -1644,14 +1644,14 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-[11px] text-muted-foreground">Nota média</p>
+                        <p className="text-2xs text-muted-foreground">Nota média</p>
                         <div className="mt-1 flex items-end gap-2">
                           <p className="text-3xl font-semibold leading-none">
                             {aval.length ? mediaNotaAtual.toFixed(1) : "-"}
                           </p>
-                          <span className="text-[11px] text-muted-foreground">/ 5</span>
+                          <span className="text-2xs text-muted-foreground">/ 5</span>
                         </div>
-                        <p className="mt-2 text-[11px] text-muted-foreground">
+                        <p className="mt-2 text-2xs text-muted-foreground">
                           Base: {aval.length} critério(s)
                         </p>
                       </div>
@@ -1662,7 +1662,7 @@ export default function FuncionarioDetalhePage() {
                     </div>
 
                     <div className="mt-3">
-                      <div className="flex items-center justify-between text-[11px]">
+                      <div className="flex items-center justify-between text-2xs">
                         <span className="text-muted-foreground">Conversão</span>
                         <span className="font-medium">
                           {aval.length ? `${percentualMedioAtual}%` : "-"}
@@ -1680,16 +1680,16 @@ export default function FuncionarioDetalhePage() {
                       return (
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="text-[11px] text-muted-foreground">Status geral</p>
+                            <p className="text-2xs text-muted-foreground">Status geral</p>
                             <div className="mt-1 flex items-end gap-2">
                               <p className="text-3xl font-semibold leading-none">
                                 {aval.length ? `${percentualMedioAtual}%` : "-"}
                               </p>
-                              <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                              <Badge variant="outline" className={`text-2xs ${tone.cls}`}>
                                 {tone.label}
                               </Badge>
                             </div>
-                            <p className="mt-2 text-[11px] text-muted-foreground">
+                            <p className="mt-2 text-2xs text-muted-foreground">
                               Visão consolidada do período
                             </p>
                           </div>
@@ -1707,11 +1707,11 @@ export default function FuncionarioDetalhePage() {
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] text-muted-foreground">Abaixo (&lt; 80%)</p>
+                        <p className="text-2xs text-muted-foreground">Abaixo (&lt; 80%)</p>
                         <p className="mt-1 text-3xl font-semibold leading-none">
                           {aval.length ? qtdAbaixo : "-"}
                         </p>
-                        <p className="mt-2 text-[11px] text-muted-foreground">
+                        <p className="mt-2 text-2xs text-muted-foreground">
                           Total: {aval.length}
                         </p>
                       </div>
@@ -1722,7 +1722,7 @@ export default function FuncionarioDetalhePage() {
                     </div>
 
                     <div className="mt-3">
-                      <div className="flex items-center justify-between text-[11px]">
+                      <div className="flex items-center justify-between text-2xs">
                         <span className="text-muted-foreground">Proporção</span>
                         <span className="font-medium">
                           {aval.length ? `${Math.round((qtdAbaixo / aval.length) * 100)}%` : "-"}
@@ -1744,9 +1744,9 @@ export default function FuncionarioDetalhePage() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold">Top 3 (melhores)</p>
-                        <p className="text-[11px] text-muted-foreground">Destaques do período</p>
+                        <p className="text-2xs text-muted-foreground">Destaques do período</p>
                       </div>
-                      <Badge variant="outline" className="text-[11px]">{top3.length}</Badge>
+                      <Badge variant="outline" className="text-2xs">{top3.length}</Badge>
                     </div>
                   </CardHeader>
                   <CardContent className="pt-0">
@@ -1761,8 +1761,8 @@ export default function FuncionarioDetalhePage() {
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-2">
-                                    <Badge variant="outline" className="text-[10px]">{t.codigo}</Badge>
-                                    <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                                    <Badge variant="outline" className="text-2xs">{t.codigo}</Badge>
+                                    <Badge variant="outline" className={`text-2xs ${tone.cls}`}>
                                       {t.percentual}%
                                     </Badge>
                                   </div>
@@ -1787,9 +1787,9 @@ export default function FuncionarioDetalhePage() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold">Bottom 3 (piores)</p>
-                        <p className="text-[11px] text-muted-foreground">Pontos prioritários</p>
+                        <p className="text-2xs text-muted-foreground">Pontos prioritários</p>
                       </div>
-                      <Badge variant="outline" className="text-[11px]">{bottom3.length}</Badge>
+                      <Badge variant="outline" className="text-2xs">{bottom3.length}</Badge>
                     </div>
                   </CardHeader>
                   <CardContent className="pt-0">
@@ -1804,8 +1804,8 @@ export default function FuncionarioDetalhePage() {
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-2">
-                                    <Badge variant="outline" className="text-[10px]">{t.codigo}</Badge>
-                                    <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                                    <Badge variant="outline" className="text-2xs">{t.codigo}</Badge>
+                                    <Badge variant="outline" className={`text-2xs ${tone.cls}`}>
                                       {t.percentual}%
                                     </Badge>
                                   </div>
@@ -1830,7 +1830,7 @@ export default function FuncionarioDetalhePage() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold">Plano de ação sugerido</p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           Recomendação automática (abaixo de 80%)
                         </p>
                       </div>
@@ -1851,15 +1851,15 @@ export default function FuncionarioDetalhePage() {
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2">
-                                  <Badge variant="outline" className="text-[10px]">{p.codigo}</Badge>
-                                  <Badge variant="outline" className={`text-[10px] ${toneFromPercent(p.percentual).cls}`}>
+                                  <Badge variant="outline" className="text-2xs">{p.codigo}</Badge>
+                                  <Badge variant="outline" className={`text-2xs ${toneFromPercent(p.percentual).cls}`}>
                                     {p.percentual}%
                                   </Badge>
                                 </div>
                                 <p className="mt-1 text-xs leading-snug whitespace-normal break-words">
                                   {p.descr}
                                 </p>
-                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                <p className="mt-2 text-2xs text-muted-foreground">
                                   Sugestão:{" "}
                                   <span className="font-medium text-foreground">{p.sugestao}</span>
                                 </p>
@@ -1868,7 +1868,7 @@ export default function FuncionarioDetalhePage() {
                           </div>
                         ))}
                         {planoAcao.length > 6 ? (
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             +{planoAcao.length - 6} itens no PDF
                           </p>
                         ) : null}
@@ -1886,7 +1886,7 @@ export default function FuncionarioDetalhePage() {
                       <p className="text-sm font-semibold">
                         Avaliação comportamental • {checkinAno}
                       </p>
-                      <p className="text-[11px] text-muted-foreground mt-1">
+                      <p className="text-2xs text-muted-foreground mt-1">
                         Use filtros para focar nos pontos críticos. O gráfico horizontal melhora a leitura.
                       </p>
                       {avalErro ? <p className="mt-2 text-sm text-red-600">{avalErro}</p> : null}
@@ -1953,11 +1953,11 @@ export default function FuncionarioDetalhePage() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold">Gráfico por critério</p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           Percentual de atingimento por critério (nota / 5).
                         </p>
                       </div>
-                      <Badge variant="outline" className="text-[11px]">
+                      <Badge variant="outline" className="text-2xs">
                         {chartData.length} item(ns)
                       </Badge>
                     </div>
@@ -2020,11 +2020,11 @@ export default function FuncionarioDetalhePage() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold">Lista de critérios</p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           Ordenado do pior para o melhor (priorização).
                         </p>
                       </div>
-                      <Badge variant="outline" className="text-[11px]">{avalFiltrada.length}</Badge>
+                      <Badge variant="outline" className="text-2xs">{avalFiltrada.length}</Badge>
                     </div>
                   </CardHeader>
 
@@ -2035,7 +2035,7 @@ export default function FuncionarioDetalhePage() {
                       </div>
                     ) : (
                       <div className="rounded-xl border bg-background">
-                        <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[11px] text-muted-foreground border-b">
+                        <div className="grid grid-cols-12 gap-2 px-3 py-2 text-2xs text-muted-foreground border-b">
                           <div className="col-span-2">Cód</div>
                           <div className="col-span-7">Critério</div>
                           <div className="col-span-3 text-right">Nota / %</div>
@@ -2051,7 +2051,7 @@ export default function FuncionarioDetalhePage() {
                                 <div key={`${a.codigo}-${a.descr}`} className="px-3 py-2">
                                   <div className="grid grid-cols-12 gap-2 items-start">
                                     <div className="col-span-2">
-                                      <Badge variant="outline" className="text-[10px]">
+                                      <Badge variant="outline" className="text-2xs">
                                         {a.codigo}
                                       </Badge>
                                     </div>
@@ -2060,7 +2060,7 @@ export default function FuncionarioDetalhePage() {
                                       {a.descr}
 
                                       <div className="mt-2">
-                                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                        <div className="flex items-center justify-between text-2xs text-muted-foreground">
                                           <span>{tone.label}</span>
                                           <span className="font-medium text-foreground">
                                             {a.percentual}%
@@ -2071,10 +2071,10 @@ export default function FuncionarioDetalhePage() {
                                     </div>
 
                                     <div className="col-span-3 text-right">
-                                      <Badge variant="outline" className={`text-[10px] ${tone.cls}`}>
+                                      <Badge variant="outline" className={`text-2xs ${tone.cls}`}>
                                         {a.pontuacao}/5 • {a.percentual}%
                                       </Badge>
-                                      <div className="text-[10px] text-muted-foreground mt-1">
+                                      <div className="text-2xs text-muted-foreground mt-1">
                                         {notaLabel(a.pontuacao)}
                                       </div>
                                     </div>
@@ -2116,7 +2116,7 @@ export default function FuncionarioDetalhePage() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold">Resumo</p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           Registro local (mock). Não grava no Sankhya ainda.
                         </p>
                       </div>
@@ -2127,17 +2127,17 @@ export default function FuncionarioDetalhePage() {
                   </CardHeader>
                   <CardContent className="pt-0 space-y-3">
                     <div className="rounded-xl border bg-background p-3">
-                      <p className="text-[11px] text-muted-foreground">Total de ocorrências</p>
+                      <p className="text-2xs text-muted-foreground">Total de ocorrências</p>
                       <p className="text-3xl font-semibold leading-none mt-1">{occRows.length}</p>
                     </div>
 
                     <div className="rounded-xl border bg-background p-3">
-                      <p className="text-[11px] text-muted-foreground">Tipos</p>
+                      <p className="text-2xs text-muted-foreground">Tipos</p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {(["Advertência", "Ajuste de ponto", "Atestado", "Outros"] as OcorrenciaTipo[]).map((t) => {
                           const qtd = occRows.filter((o) => o.tipo === t).length;
                           return (
-                            <Badge key={t} variant="outline" className="text-[11px]">
+                            <Badge key={t} variant="outline" className="text-2xs">
                               {t}: <b className="ml-1">{qtd}</b>
                             </Badge>
                           );
@@ -2150,7 +2150,7 @@ export default function FuncionarioDetalhePage() {
                       Nova ocorrência
                     </Button>
 
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-2xs text-muted-foreground">
                       * Anexo (por enquanto) salva apenas <b>nome/tamanho/tipo</b> do arquivo.
                     </p>
                   </CardContent>
@@ -2161,11 +2161,11 @@ export default function FuncionarioDetalhePage() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold">Ocorrências</p>
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-2xs text-muted-foreground">
                           Você pode filtrar por tipo, data, texto ou nome do anexo.
                         </p>
                       </div>
-                      <Badge variant="outline" className="text-[11px]">
+                      <Badge variant="outline" className="text-2xs">
                         {occFiltradas.length} item(ns)
                       </Badge>
                     </div>
@@ -2206,19 +2206,19 @@ export default function FuncionarioDetalhePage() {
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <Badge variant="outline" className="text-[10px]">{o.tipo}</Badge>
-                                  <Badge variant="secondary" className="text-[10px] gap-1">
+                                  <Badge variant="outline" className="text-2xs">{o.tipo}</Badge>
+                                  <Badge variant="secondary" className="text-2xs gap-1">
                                     <CalendarDays className="h-3 w-3" />
                                     {brDate(o.data)}
                                   </Badge>
 
                                   {o.anexo?.name ? (
-                                    <Badge variant="outline" className="text-[10px] gap-1">
+                                    <Badge variant="outline" className="text-2xs gap-1">
                                       <Paperclip className="h-3 w-3" />
                                       {o.anexo.name}
                                     </Badge>
                                   ) : (
-                                    <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                                    <Badge variant="outline" className="text-2xs text-muted-foreground">
                                       Sem anexo
                                     </Badge>
                                   )}
@@ -2229,7 +2229,7 @@ export default function FuncionarioDetalhePage() {
                                 </p>
 
                                 {o.anexo?.name ? (
-                                  <p className="mt-2 text-[11px] text-muted-foreground">
+                                  <p className="mt-2 text-2xs text-muted-foreground">
                                     Anexo: <b>{o.anexo.name}</b> • {fmtBytes(o.anexo.size)} • {o.anexo.type || "—"}
                                   </p>
                                 ) : null}
@@ -2249,7 +2249,7 @@ export default function FuncionarioDetalhePage() {
                                   Remover
                                 </Button>
 
-                                <div className="text-[10px] text-muted-foreground">
+                                <div className="text-2xs text-muted-foreground">
                                   Criado em: {new Date(o.createdAt).toLocaleString("pt-BR")}
                                 </div>
                               </div>

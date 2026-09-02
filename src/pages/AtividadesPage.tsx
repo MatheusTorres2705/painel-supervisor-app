@@ -1,12 +1,11 @@
 // src/pages/AtividadesPage.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { obterReg } from "@/lib/obterReg";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import {
   Sheet,
   SheetContent,
@@ -353,13 +352,13 @@ export default function AtividadesPage() {
                     <div className="col-span-2 text-xs">
                       {op.nomeparc || "-"}
                       {op.codparc ? (
-                        <span className="block text-[11px] text-muted-foreground">
+                        <span className="block text-2xs text-muted-foreground">
                           Cod. {op.codparc}
                         </span>
                       ) : null}
                     </div>
                     <div className="col-span-2 flex flex-col gap-1">
-                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <div className="flex items-center gap-2 text-2xs text-muted-foreground">
                         <span>Prev:</span>
                         <div className="h-2 w-24 rounded-full bg-muted overflow-hidden">
                           <div
@@ -369,7 +368,7 @@ export default function AtividadesPage() {
                         </div>
                         <span>{prev}%</span>
                       </div>
-                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <div className="flex items-center gap-2 text-2xs text-muted-foreground">
                         <span>Real:</span>
                         <div className="h-2 w-24 rounded-full bg-muted overflow-hidden">
                           <div
@@ -380,7 +379,7 @@ export default function AtividadesPage() {
                         <span>{real}%</span>
                       </div>
                       <div className="mt-1">
-                        <Badge variant={badgeVariant as any} className="text-[11px]">
+                        <Badge variant={badgeVariant as any} className="text-2xs">
                           {status}
                         </Badge>
                       </div>
@@ -409,8 +408,8 @@ export default function AtividadesPage() {
       {/* Sheet de Planejamento da OP */}
       <Sheet open={!!openOp} onOpenChange={fecharOP}>
         {openOp && (
-          <SheetContent side="right" size="lg" className="bg-white">
-            <SheetHeader className="bg-white border-b">
+          <SheetContent side="right" size="lg" className="bg-card">
+            <SheetHeader className="bg-card border-b">
               <div className="flex items-center justify-between">
                 <div>
                   <SheetTitle>
@@ -432,7 +431,7 @@ export default function AtividadesPage() {
               </div>
             </SheetHeader>
 
-            <div className="p-4 space-y-6 overflow-auto h-[calc(100%-64px)] bg-white">
+            <div className="p-4 space-y-6 overflow-auto h-[calc(100%-64px)] bg-card">
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold">Janela de Planejamento</h4>
                 <p className="text-xs text-muted-foreground">
