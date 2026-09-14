@@ -6,6 +6,47 @@ type SankhyaDatasetRetorno = {
   transactionId?: string;
 };
 
+type ErroApi = {
+  response?: { status?: number; data?: { erro?: unknown; detalhe?: unknown; codigo?: unknown } };
+  message?: unknown;
+};
+
+/** Códigos do backend que significam "a sessão acabou" (ver middleware/auth.js). */
+const CODIGOS_SESSAO = new Set(["TOKEN_AUSENTE", "TOKEN_EXPIRADO", "TOKEN_INVALIDO", "CREDENCIAL_INVALIDA"]);
+
+/**
+ * Extrai a mensagem mais útil de um erro de chamada ao ERP, na ordem:
+ * statusMessage do Sankhya -> `erro` do backend -> message do axios -> fallback.
+ * Substitui a cadeia `e?.response?.data?...` com `catch (e: any)` repetida
+ * em todas as páginas.
+ */
+export function mensagemErro(e: unknown, fallback = "Erro desconhecido."): string {
+  const err = (e ?? {}) as ErroApi;
+  const data = err.response?.data;
+
+  // Sessão vencida: o usuário é levado ao login; se a tela chegar a mostrar a
+  // mensagem nesse meio-tempo, que não seja o "Token inválido" cru. O 401 de
+  // senha errada no login não tem esses códigos e segue o fluxo normal.
+  if (
+    err.response?.status === 401 &&
+    (CODIGOS_SESSAO.has(String(data?.codigo)) || /^Token (inválido|ausente)$/.test(String(data?.erro ?? "")))
+  ) {
+    return "Sua sessão expirou. Entre novamente.";
+  }
+
+  const detalhe = data?.detalhe;
+
+  const statusMessage =
+    detalhe && typeof detalhe === "object"
+      ? (detalhe as { statusMessage?: unknown }).statusMessage
+      : detalhe;
+
+  for (const candidato of [statusMessage, data?.erro, err.message]) {
+    if (typeof candidato === "string" && candidato.trim()) return candidato;
+  }
+  return fallback;
+}
+
 export function htmlToText(html: string) {
   try {
     const doc = new DOMParser().parseFromString(String(html || ""), "text/html");

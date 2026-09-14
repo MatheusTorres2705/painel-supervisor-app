@@ -9,6 +9,7 @@ import {
   Lock,
   Pencil,
   RotateCcw,
+  Trash2,
   Users,
 } from "lucide-react";
 
@@ -61,6 +62,7 @@ export function EventoCard({
   onAprovarSelecionados,
   onReverter,
   onEditar,
+  onRemover,
   ocupado,
 }: {
   evento: Evento;
@@ -75,6 +77,7 @@ export function EventoCard({
   onAprovarSelecionados: (itens: HoraExtraRow[]) => void;
   onReverter: (r: HoraExtraRow) => void;
   onEditar: (evento: Evento) => void;
+  onRemover: (itens: HoraExtraRow[]) => void;
   ocupado: boolean;
 }) {
   // Só entram em lote os pendentes cujo supervisor é o usuário logado.
@@ -249,27 +252,41 @@ export function EventoCard({
                     {formatDuracao(evento.minutosPorPessoa)}
                   </span>
 
-                  {r.liberado === "S" ? (
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Badge variant="success">Aprovado</Badge>
-                      {podeAprovar ? (
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => onReverter(r)}
-                          disabled={ocupado}
-                          aria-label={`Reverter aprovação de ${r.nomefunc}`}
-                          title="Reverter aprovação"
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" />
-                        </Button>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <Badge variant="warning" className="shrink-0">
-                      Pendente
-                    </Badge>
-                  )}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {r.liberado === "S" ? (
+                      <>
+                        <Badge variant="success">Aprovado</Badge>
+                        {podeAprovar ? (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => onReverter(r)}
+                            disabled={ocupado}
+                            aria-label={`Reverter aprovação de ${r.nomefunc}`}
+                            title="Reverter aprovação"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <Badge variant="warning">Pendente</Badge>
+                    )}
+
+                    {podeAprovar ? (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => onRemover([r])}
+                        disabled={ocupado}
+                        aria-label={`Remover ${r.nomefunc} do turno`}
+                        title="Remover do turno"
+                        className="text-muted-foreground hover:bg-destructive-subtle hover:text-destructive"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    ) : null}
+                  </div>
                 </li>
               );
             })}

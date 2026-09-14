@@ -16,6 +16,7 @@ export function StatCard({
   detail,
   delta,
   deltaTone = "neutral",
+  tone,
   loading,
   onClick,
   className,
@@ -28,6 +29,8 @@ export function StatCard({
   /** Ex.: "+4,2%". Renderiza uma seta conforme o sinal. */
   delta?: { value: string; direction: "up" | "down" };
   deltaTone?: Tone;
+  /** Colore o próprio número (ex.: atingimento acima/abaixo da meta). */
+  tone?: Tone;
   loading?: boolean;
   onClick?: () => void;
   className?: string;
@@ -67,7 +70,12 @@ export function StatCard({
           {loading ? (
             <Skeleton className="h-8 w-24" />
           ) : (
-            <p className="tabular text-3xl font-semibold leading-none text-foreground">
+            <p
+              className={cn(
+                "tabular whitespace-nowrap text-3xl font-semibold leading-none",
+                tone ? toneText[tone] : "text-foreground"
+              )}
+            >
               {value}
             </p>
           )}
@@ -75,7 +83,7 @@ export function StatCard({
           {loading ? (
             <Skeleton className="h-3 w-16" />
           ) : (
-            <div className="flex items-center gap-2 text-2xs">
+            <div className="flex items-start gap-2 text-2xs">
               {delta ? (
                 <span
                   className={cn(
@@ -92,7 +100,15 @@ export function StatCard({
                 </span>
               ) : null}
               {detail ? (
-                <span className="truncate text-muted-foreground">{detail}</span>
+                // Até duas linhas: explicações de indicador ("ponto − atividades −
+                // perdas…") perdiam o sentido cortadas numa só. O texto inteiro
+                // fica no `title`.
+                <span
+                  className="line-clamp-2 min-w-0 text-muted-foreground"
+                  title={typeof detail === "string" ? detail : undefined}
+                >
+                  {detail}
+                </span>
               ) : null}
             </div>
           )}

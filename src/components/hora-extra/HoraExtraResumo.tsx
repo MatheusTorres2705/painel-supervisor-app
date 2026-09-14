@@ -29,6 +29,7 @@ export function HoraExtraResumo({
   minutosMesAnterior,
   comparativoLoading,
   onVerPendentes,
+  parte,
 }: {
   rows: HoraExtraRow[];
   loading: boolean;
@@ -38,6 +39,11 @@ export function HoraExtraResumo({
   minutosMesAnterior: number | null;
   comparativoLoading: boolean;
   onVerPendentes: () => void;
+  /**
+   * Qual bloco renderizar. A página separa os dois: os indicadores ficam no
+   * cabeçalho fixo, os gráficos rolam com a página. Sem `parte`, os dois.
+   */
+  parte?: "indicadores" | "graficos";
 }) {
   const resumo = resumir(rows);
   const deps = porDepartamento(rows);
@@ -51,8 +57,12 @@ export function HoraExtraResumo({
   const maiorDep = deps[0]?.minutos ?? 0;
   const maiorColab = ranking[0]?.minutos ?? 0;
 
+  const comIndicadores = parte !== "graficos";
+  const comGraficos = parte !== "indicadores";
+
   return (
     <div className="space-y-4">
+      {comIndicadores && (
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={Clock}
@@ -107,7 +117,9 @@ export function HoraExtraResumo({
           detail={`em ${resumo.eventos} evento(s)`}
         />
       </div>
+      )}
 
+      {comGraficos && (
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="pb-3">
@@ -221,6 +233,7 @@ export function HoraExtraResumo({
           </CardContent>
         </Card>
       </div>
+      )}
     </div>
   );
 }

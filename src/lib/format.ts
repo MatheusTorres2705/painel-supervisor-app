@@ -5,6 +5,20 @@
 /** Placeholder padrão para valor ausente em toda a UI. */
 export const EMPTY = "—";
 
+/** Uma linha crua devolvida por `obterReg`. */
+export type ErpRow = Record<string, unknown>;
+
+/** Coerção segura de coluna do ERP para texto. */
+export function txt(v: unknown): string {
+  return v == null ? "" : String(v);
+}
+
+/** Coerção segura de coluna do ERP para número (0 se não for numérico). */
+export function int(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 /** `YYYY-MM-DD` -> `DD/MM/YYYY`. Tolerante a nulo e a formato inesperado. */
 export function toBR(ymd?: string | null): string {
   if (!ymd) return EMPTY;

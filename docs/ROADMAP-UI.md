@@ -55,17 +55,23 @@ Itens ordenados por relação impacto/esforço.
   sobrepunham no SQL e devolviam vazio sem explicar), busca por nome ganhou
   debounce de 400ms (antes cada tecla disparava um SELECT no Oracle) e todos os
   campos usam `<Field>` com `htmlFor`.
-- **Ações novas**: reverter aprovação e editar o horário do turno.
+- **Ações novas**: reverter aprovação, editar o horário do turno e remover
+  colaborador do turno (individual ou em lote, via
+  `POST /api/sankhya/dataset/remove` com `entity: "AD_BCOFUN"` e
+  `pks: [{ CODBANCOHORAS, CODBCOHRFUN }]`). Quando a remoção esvazia um turno, a
+  confirmação oferece apagar também o cabeçalho `AD_BANCOHORAS` — a consulta
+  principal usa INNER JOIN em `AD_BCOFUN`, então um turno sem ninguém sumiria da
+  tela e ficaria órfão, sem forma de limpá-lo depois.
 - **Linguagem**: `CODDEP`/`DTUSO`/`HRINI`/`LIBERADO = "S"`/`AD_BCOFUN` saíram da
   interface; o retorno técnico do ERP ficou recolhido num `<details>`.
 
-### Pendente: remover colaborador de um evento
-Você pediu essa ação e ela **não foi implementada** — o backend expõe apenas
-`/api/auth/login`, `/api/obter-reg` e `/api/sankhya/dataset/save`. Não há
-endpoint de exclusão, e ele vive em outro projeto. Para destravar, o backend
-precisa de um `dataset/remove` (ou equivalente) para `AD_BCOFUN` recebendo a PK
-`{ CODBANCOHORAS, CODBCOHRFUN }`; a UI já tem o lugar natural para o botão, na
-linha do colaborador dentro do `EventoCard`.
+### Endpoints do backend disponíveis
+O backend (`Projetos/API/painel-compras-nx-api`, porta 3200) expõe mais do que
+este projeto usava. Além de `/api/obter-reg` e `/api/sankhya/dataset/save`,
+existem `/api/sankhya/dataset/remove` (`DatasetSP.removeRecord`, aceita `pks[]`
+em lote), `/api/sankhya/dataset/save-with-image` e `/api/sankhya/servico`.
+Vale conferir a rota antes de assumir que uma operação não é possível pelo
+front — as demais páginas ainda não usam `remove` nem `servico`.
 
 ---
 

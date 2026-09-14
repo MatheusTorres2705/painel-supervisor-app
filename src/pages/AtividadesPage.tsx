@@ -2,10 +2,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { obterReg } from "@/lib/obterReg";
+import { mesAnoKey, monthYearLabel, pad2 } from "@/lib/datetime";
+import { txt, type ErpRow } from "@/lib/format";
+import { mensagemErro } from "@/lib/sankhyaRetorno";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import {
   Sheet,
   SheetContent,
@@ -45,6 +50,66 @@ function statusFromAvanco(prev: number, real: number): StatusOP {
   return "Baixo avanço";
 }
 
+/** Ordem de exibição das linhas; as mesmas etiquetas do CASE da consulta. */
+const ORDEM_LINHAS = ["NX 260-290", "NX 340-350", "NX 360-370", "NX 410", "NX 440", "NX 500"];
+
+/* ── Período do cronograma ───────────────────────────────────────
+   O cronograma é mensal (AD_CRONOGRAMA.ANO / MES). O período é escolhido
+   em meses, "YYYY-MM", e vira pares ano × mês na consulta.
+
+   Antes os meses eram fixos no SQL (ANO 2026, meses 11,12,1..6) e a linha
+   fixa em NX 500 — sobra de uma troca manual de datas. A tela mostrava
+   poucas OPs e nunca o mês corrente. */
+
+type MesAno = { ano: number; mes: number };
+
+function lerChaveMes(k: string): MesAno {
+  const [a, m] = k.split("-").map(Number);
+  return { ano: a, mes: m };
+}
+
+function mesesEntre(ini: MesAno, fim: MesAno): MesAno[] {
+  const out: MesAno[] = [];
+  let { ano, mes } = ini;
+  while (ano < fim.ano || (ano === fim.ano && mes <= fim.mes)) {
+    out.push({ ano, mes });
+    mes += 1;
+    if (mes > 12) {
+      mes = 1;
+      ano += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Filtro de ano × mês do cronograma. O mês vai com e sem zero à esquerda
+ * ('9' e '09'): o SQL antigo misturava os dois formatos e o Dashboard usa
+ * sem zero, então não dá para confiar em um só.
+ */
+function sqlMesesCronograma(ini: string, fim: string): string {
+  const porAno = new Map<number, Set<string>>();
+  for (const { ano, mes } of mesesEntre(lerChaveMes(ini), lerChaveMes(fim))) {
+    const s = porAno.get(ano) ?? new Set<string>();
+    s.add(`'${mes}'`);
+    s.add(`'${pad2(mes)}'`);
+    porAno.set(ano, s);
+  }
+  const partes = [...porAno].map(
+    ([ano, meses]) => `(CRO.ANO = '${ano}' AND CRO.MES IN (${[...meses].join(", ")}))`
+  );
+  return partes.length ? `(${partes.join(" OR ")})` : "1 = 0";
+}
+
+/** Do janeiro do ano passado ao dezembro do ano que vem. */
+function opcoesMes(hoje = new Date()): { value: string; label: string }[] {
+  const a = hoje.getFullYear();
+  return mesesEntre({ ano: a - 1, mes: 1 }, { ano: a + 1, mes: 12 }).map((m) => ({
+    value: mesAnoKey(m.ano, m.mes),
+    label: monthYearLabel(m.mes, m.ano),
+  }));
+}
+
 export default function AtividadesPage() {
   const navigate = useNavigate();
 
@@ -52,9 +117,22 @@ export default function AtividadesPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [ops, setOps] = useState<OPPlanejamento[]>([]);
 
+  // período (padrão: mês atual)
+  const mesesDisponiveis = useMemo(() => opcoesMes(), []);
+  const mesAtual = useMemo(() => {
+    const d = new Date();
+    return mesAnoKey(d.getFullYear(), d.getMonth() + 1);
+  }, []);
+  const [mesIni, setMesIni] = useState(mesAtual);
+  const [mesFim, setMesFim] = useState(mesAtual);
+  // "YYYY-MM" ordena como texto; aceita De depois de Até sem consulta vazia.
+  const periodo = mesIni <= mesFim ? { ini: mesIni, fim: mesFim } : { ini: mesFim, fim: mesIni };
+  const qtdMeses = mesesEntre(lerChaveMes(periodo.ini), lerChaveMes(periodo.fim)).length;
+
   // filtros
   const [q, setQ] = useState("");
   const [linhaFiltro, setLinhaFiltro] = useState<string>("Todas");
+  const [chassiFiltro, setChassiFiltro] = useState<string>("Todos");
   const [statusFiltro, setStatusFiltro] = useState<"Todos" | StatusOP>("Todos");
 
   // sheet OP aberta
@@ -157,9 +235,7 @@ export default function AtividadesPage() {
              AND CAB.TIPMOV = 'P'
             LEFT JOIN TGFPAR PAR
               ON PAR.CODPARC = CAB.CODPARC
-            WHERE CRO.ANO IN (  '2026')
-              AND CRO.MES IN ( '11' , '12' , '1' , '2' , '03' , '04' , '05' , '06' )
-              AND PAI.AD_CODGRUPOPROD IN (020900,021100)
+            WHERE ${sqlMesesCronograma(periodo.ini, periodo.fim)}
           ) T
           GROUP BY
             T.IDIPROC,
@@ -174,22 +250,27 @@ export default function AtividadesPage() {
         const rows = await obterReg(sql);
         if (cancel) return;
 
-        const mapped: OPPlanejamento[] = rows.map((r: any) => ({
-          op: String(r.OP ?? ""),
-          barco: String(r.BARCO ?? ""),
-          linha: String(r.LINHA ?? ""),
+        const mapped: OPPlanejamento[] = rows.map((r: ErpRow) => ({
+          op: txt(r.OP),
+          barco: txt(r.BARCO),
+          linha: txt(r.LINHA),
           avancoPrev: Number(r.AVANCO_PREV ?? 0),
           avancoReal: Number(r.AVANCO_REAL ?? 0),
           codproj: Number(r.CODPROJ ?? 0),
-          identificacao: String(r.IDENTIFICACAO ?? ""),
+          identificacao: txt(r.IDENTIFICACAO),
           codparc: r.CODPARC != null ? Number(r.CODPARC) : null,
           nomeparc: r.NOMEPARC != null ? String(r.NOMEPARC) : null,
         }));
 
         setOps(mapped);
-      } catch (e: any) {
+        // Mantém o chassi escolhido só se ele ainda existe no período novo.
+        setChassiFiltro((c) => (mapped.some((o) => o.barco === c) ? c : "Todos"));
+      } catch (e: unknown) {
         console.error(e);
-        setErro(e?.message || "Falha ao carregar OPs para planejamento.");
+        if (!cancel) {
+          setOps([]);
+          setErro(mensagemErro(e, "Falha ao carregar OPs para planejamento."));
+        }
       } finally {
         if (!cancel) setLoading(false);
       }
@@ -198,12 +279,36 @@ export default function AtividadesPage() {
     return () => {
       cancel = true;
     };
-  }, []);
+  }, [periodo.ini, periodo.fim]);
+
+  // =============== Opções dos filtros (a partir do que veio) ===============
+  const linhas = useMemo(() => {
+    const presentes = new Set(ops.map((o) => o.linha).filter(Boolean));
+    const conhecidas = ORDEM_LINHAS.filter((l) => presentes.has(l));
+    const outras = [...presentes]
+      .filter((l) => !ORDEM_LINHAS.includes(l))
+      .sort((a, b) => a.localeCompare(b, "pt-BR"));
+    return [...conhecidas, ...outras];
+  }, [ops]);
+
+  // Chassis em cascata: com uma linha escolhida, só os chassis dela.
+  const chassis = useMemo(() => {
+    const set = new Set(
+      ops
+        .filter((o) => linhaFiltro === "Todas" || o.linha === linhaFiltro)
+        .map((o) => o.barco)
+        .filter(Boolean)
+    );
+    return [...set].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
+  }, [ops, linhaFiltro]);
+
+  // Defesa para o render antes do reset: um chassi fora da lista não filtra nada escondido.
+  const chassiAtivo = chassiFiltro !== "Todos" && chassis.includes(chassiFiltro) ? chassiFiltro : "Todos";
 
   // =============== Lista filtrada ===============
   const list = useMemo(() => {
+    const k = q.trim().toLowerCase();
     return ops.filter((op) => {
-      const k = q.trim().toLowerCase();
       if (k) {
         const hay =
           `${op.op} ${op.barco} ${op.linha} ${op.identificacao} ${op.nomeparc ?? ""}`.toLowerCase();
@@ -211,15 +316,16 @@ export default function AtividadesPage() {
       }
 
       if (linhaFiltro !== "Todas" && op.linha !== linhaFiltro) return false;
+      if (chassiAtivo !== "Todos" && op.barco !== chassiAtivo) return false;
 
       if (statusFiltro !== "Todos") {
-        const st = statusFromAvanco(op.avancoPrev, op.avancoReal);
+        const st = statusFromAvanco(pct(op.avancoPrev), pct(op.avancoReal));
         if (st !== statusFiltro) return false;
       }
 
       return true;
     });
-  }, [ops, q, linhaFiltro, statusFiltro]);
+  }, [ops, q, linhaFiltro, chassiAtivo, statusFiltro]);
 
   // abrir/fechar sheet
   const abrirOP = (op: OPPlanejamento) => setOpenOp(op);
@@ -256,52 +362,107 @@ export default function AtividadesPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold">Planejamento de OPs</h3>
-            <span className="text-xs text-muted-foreground">
-              Total de OPs: {ops.length}
+            <span className="text-xs text-muted-foreground tabular">
+              {loading
+                ? "Carregando…"
+                : list.length === ops.length
+                ? `Total de OPs: ${ops.length}`
+                : `${list.length} de ${ops.length} OPs`}
             </span>
           </div>
         </CardHeader>
         <CardContent className="grid grid-cols-12 gap-3">
-          <div className="col-span-12 md:col-span-4">
-          <label className="text-xs text-muted-foreground">OP's</label>
-            <Input
-            
-              placeholder="Buscar por OP, barco, linha, cliente…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-          </div>
+          <Field label="De" className="col-span-6 sm:col-span-3 lg:col-span-2">
+            {(p) => (
+              <Select {...p} value={mesIni} onChange={(e) => setMesIni(e.target.value)}>
+                {mesesDisponiveis.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
 
-          <div className="col-span-6 md:col-span-3">
-            <label className="text-xs text-muted-foreground">Linha</label>
-            <select
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-              value={linhaFiltro}
-              onChange={(e) => setLinhaFiltro(e.target.value)}
-            >
-              <option value="Todas">Todas</option>
-              <option value="NX 260-290">NX 260-290</option>
-              <option value="NX 340-350">NX 340-350</option>
-              <option value="NX 360-370">NX 360-370</option>
-              <option value="NX 410">NX 410</option>
-              <option value="NX 440">NX 440</option>
-              <option value="NX 500">NX 500</option>
-            </select>
-          </div>
+          <Field
+            label="Até"
+            className="col-span-6 sm:col-span-3 lg:col-span-2"
+            hint={qtdMeses > 3 ? "Períodos longos deixam a consulta lenta." : undefined}
+          >
+            {(p) => (
+              <Select {...p} value={mesFim} onChange={(e) => setMesFim(e.target.value)}>
+                {mesesDisponiveis.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
 
-          <div className="col-span-6 md:col-span-3">
-            <label className="text-xs text-muted-foreground">% Avanço Real</label>
-            <select
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-              value={statusFiltro}
-              onChange={(e) => setStatusFiltro(e.target.value as any)}
-            >
-              <option value="Todos">Todos</option>
-              <option value="Baixo avanço">Baixo avanço</option>
-              <option value="Em dia">Em dia</option>
-              <option value="Adiantado">Adiantado</option>
-            </select>
-          </div>
+          <Field label="Linha" className="col-span-6 sm:col-span-3 lg:col-span-2">
+            {(p) => (
+              <Select
+                {...p}
+                value={linhaFiltro}
+                onChange={(e) => {
+                  setLinhaFiltro(e.target.value);
+                  setChassiFiltro("Todos"); // o chassi depende da linha
+                }}
+              >
+                <option value="Todas">Todas</option>
+                {linhas.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field label="Chassi" className="col-span-6 sm:col-span-3 lg:col-span-2">
+            {(p) => (
+              <Select
+                {...p}
+                value={chassiAtivo}
+                onChange={(e) => setChassiFiltro(e.target.value)}
+                disabled={!chassis.length}
+              >
+                <option value="Todos">Todos</option>
+                {chassis.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+
+          <Field label="% Avanço real" className="col-span-6 sm:col-span-4 lg:col-span-2">
+            {(p) => (
+              <Select
+                {...p}
+                value={statusFiltro}
+                onChange={(e) => setStatusFiltro(e.target.value as "Todos" | StatusOP)}
+              >
+                <option value="Todos">Todos</option>
+                <option value="Baixo avanço">Baixo avanço</option>
+                <option value="Em dia">Em dia</option>
+                <option value="Adiantado">Adiantado</option>
+              </Select>
+            )}
+          </Field>
+
+          <Field label="Buscar" className="col-span-6 sm:col-span-8 lg:col-span-2">
+            {(p) => (
+              <Input
+                {...p}
+                placeholder="OP, chassi, cliente…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+            )}
+          </Field>
         </CardContent>
       </Card>
 
@@ -310,7 +471,7 @@ export default function AtividadesPage() {
         <CardContent className="p-0">
           <div className="grid grid-cols-12 px-4 py-3 text-xs text-muted-foreground bg-muted/30">
             <div className="col-span-2">OP</div>
-            <div className="col-span-2">Barco</div>
+            <div className="col-span-2">Chassi</div>
             <div className="col-span-2">Linha</div>
             <div className="col-span-2">Cliente</div>
             <div className="col-span-2">Avanço</div>

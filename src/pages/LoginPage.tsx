@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 
 import { useAuth } from "@/auth/AuthProvider";
+import { mensagemErro } from "@/lib/sankhyaRetorno";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
@@ -40,7 +41,7 @@ function OceanWaves() {
 }
 
 const LoginPage: React.FC = () => {
-  const { login } = useAuth();
+  const { login, motivoSaida } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
 
@@ -57,10 +58,11 @@ const LoginPage: React.FC = () => {
     setLoading(true);
     try {
       await login(u, p); // POST /api/auth/login
-      const from = (location.state as any)?.from?.pathname ?? "/";
-      nav(from, { replace: true });
-    } catch (e: any) {
-      setErr(e?.response?.data?.erro || "Usuário ou senha inválidos");
+      // Volta para a tela de onde a sessão caiu, com a query string (filtros na URL).
+      const origem = (location.state as { from?: { pathname?: string; search?: string } } | null)?.from;
+      nav(origem?.pathname ? `${origem.pathname}${origem.search ?? ""}` : "/", { replace: true });
+    } catch (e: unknown) {
+      setErr(mensagemErro(e, "Usuário ou senha inválidos"));
     } finally {
       setLoading(false);
     }
@@ -111,6 +113,13 @@ const LoginPage: React.FC = () => {
           </div>
 
           <form onSubmit={onSubmit} className="space-y-4" noValidate>
+            {/* Sem isto, a sessão vencida aparecia como "Token inválido" no meio
+                da tela e o usuário achava que era bug. */}
+            {motivoSaida === "expirada" && !err ? (
+              <Alert variant="info" title="Sua sessão expirou">
+                Entre novamente para continuar de onde parou.
+              </Alert>
+            ) : null}
             {err ? <Alert variant="destructive">{err}</Alert> : null}
 
             <Field label="Usuário" required>

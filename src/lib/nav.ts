@@ -4,10 +4,12 @@
 import {
   CalendarDays,
   ClipboardList,
+  Gauge,
   Grid3x3,
   Home,
   KanbanSquare,
   PackageSearch,
+  Target,
   Timer,
   Users,
   type LucideIcon,
@@ -25,6 +27,8 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: Home, hint: "Visão geral de indicadores" },
+  { path: "/meta-producao", label: "Meta de Produção", icon: Target, hint: "Meta × realizado de HH da produção" },
+  { path: "/ope", label: "OPE", icon: Gauge, hint: "Operacional de produção — atividades ÷ ponto" },
   { path: "/equipe", label: "Equipe", icon: Users, hint: "Colaboradores e desempenho" },
   { path: "/piramide", label: "Pirâmide", icon: Grid3x3, hint: "Competências e senioridade" },
   { path: "/atividades", label: "Atividades / OP", icon: ClipboardList, hint: "Planejamento de ordens de produção" },

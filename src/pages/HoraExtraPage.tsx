@@ -7,14 +7,19 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Trash2,
   X,
 } from "lucide-react";
 
 import { obterReg } from "@/lib/obterReg";
+import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthProvider";
-import { parseDatasetSaveResponse } from "@/lib/sankhyaRetorno";
-import { exportCsv, toBR } from "@/lib/format";
+import {
+  mensagemErro,
+  parseDatasetSaveResponse,
+} from "@/lib/sankhyaRetorno";
+import { exportCsv, int, toBR, txt, type ErpRow } from "@/lib/format";
 import {
   duracaoMin,
   faixaHorario,
@@ -104,9 +109,75 @@ function ymdToBrDate(ymd: string) {
  */
 const CAB_DATE_FIELD: "DTUSO" | "DTUSU" = "DTUSO";
 
+/**
+ * Base comum da lista e do comparativo. Os INNER JOIN com TSIUSU também filtram
+ * (colaborador sem supervisor cadastrado não aparece): por isso as duas
+ * consultas precisam dos mesmos JOINs, senão contam universos diferentes.
+ */
+const FROM_HORA_EXTRA = `
+        FROM AD_BANCOHORAS HR
+        JOIN AD_BCOFUN FUN ON FUN.CODBANCOHORAS = HR.CODBANCOHORAS
+        JOIN TFPFUN F ON F.CODFUNC = FUN.CODFUNC
+        JOIN TSIUSU SUP ON SUP.CODUSU = F.USUVPJSUP
+        JOIN TSIUSU SOL ON SOL.CODUSU = HR.CODUSU`;
+
+/** Eventos em que o usuário é supervisor do colaborador ou quem solicitou. */
+const escopoSupervisor = (codusu: number) =>
+  `(F.USUVPJSUP = ${Number(codusu)} OR HR.CODUSU = ${Number(codusu)})`;
+
+/**
+ * Filtros e indicadores ficam fixos no topo só em tela larga E alta. No tablet
+ * e no celular os filtros quebram em várias linhas e os indicadores empilham:
+ * fixos, ocupariam a tela inteira e não sobraria espaço para a grade.
+ */
+const MIDIA_CABECALHO_FIXO = "(min-width: 1280px) and (min-height: 720px)";
+
+function useCabecalhoFixo() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [ativo, setAtivo] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(MIDIA_CABECALHO_FIXO).matches
+  );
+  const [preso, setPreso] = useState(false);
+  const [altura, setAltura] = useState(0);
+
+  useEffect(() => {
+    const mq = window.matchMedia(MIDIA_CABECALHO_FIXO);
+    const aoMudar = () => setAtivo(mq.matches);
+    mq.addEventListener("change", aoMudar);
+    return () => mq.removeEventListener("change", aoMudar);
+  }, []);
+
+  // Altura real do bloco fixo: a barra de seleção em lote gruda logo abaixo dele.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setAltura(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // "Preso" = já grudou no topo; só então ganha borda e sombra.
+  useEffect(() => {
+    const el = ref.current;
+    const raiz = el?.closest("main");
+    if (!el || !raiz || !ativo) {
+      setPreso(false);
+      return;
+    }
+    const aoRolar = () =>
+      setPreso(el.getBoundingClientRect().top <= raiz.getBoundingClientRect().top + 0.5);
+    aoRolar();
+    raiz.addEventListener("scroll", aoRolar, { passive: true });
+    return () => raiz.removeEventListener("scroll", aoRolar);
+  }, [ativo]);
+
+  return { ref, ativo, preso, altura };
+}
+
 export default function HoraExtraPage() {
   const { user } = useAuth();
-  const CODUSU_SUP = Number((user as any)?.codusu || 0);
+  const fixo = useCabecalhoFixo();
+  const CODUSU_SUP = Number(user?.codusu || 0);
 
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -155,6 +226,11 @@ export default function HoraExtraPage() {
   const [processando, setProcessando] = useState(false);
   const [progresso, setProgresso] = useState({ total: 0, ok: 0, fail: 0 });
 
+  /* ====================== Remover colaborador ====================== */
+  const [removerAlvo, setRemoverAlvo] = useState<HoraExtraRow[]>([]);
+  const [removerTurnoVazio, setRemoverTurnoVazio] = useState(true);
+  const [removendo, setRemovendo] = useState(false);
+
   /* ========================= Editar evento ========================= */
   const [editarEvento, setEditarEvento] = useState<Evento | null>(null);
   const [editHrIni, setEditHrIni] = useState("");
@@ -174,9 +250,25 @@ export default function HoraExtraPage() {
   }, []);
 
   /* ==================== Carregar lista principal ==================== */
-  const filtrosSql = useCallback(() => {
+  /**
+   * Setor, situação e colaborador — tudo menos o período. Separado para o
+   * comparativo com o mês anterior aplicar EXATAMENTE o mesmo recorte: antes ele
+   * ignorava os filtros e, com um setor selecionado, comparava as horas daquele
+   * setor com o mês anterior da fábrica inteira.
+   */
+  const recorteSql = useMemo(() => {
     const depDigits = safeDigits(coddep);
     const nome = safeSqlLike(nomeBusca);
+    return [
+      depDigits ? `AND HR.CODDEP = ${Number(depDigits)}` : "",
+      status !== "Todos" ? `AND NVL(FUN.LIBERADO,'N') = '${status}'` : "",
+      nome ? `AND UPPER(F.NOMEFUNC) LIKE '%' || UPPER('${nome}') || '%'` : "",
+    ]
+      .filter(Boolean)
+      .join("\n          ");
+  }, [coddep, nomeBusca, status]);
+
+  const filtrosSql = useCallback(() => {
     const dtIniOk = /^\d{4}-\d{2}-\d{2}$/.test(dtIni);
     const dtFimOk = /^\d{4}-\d{2}-\d{2}$/.test(dtFim);
 
@@ -190,15 +282,8 @@ export default function HoraExtraPage() {
             .filter(Boolean)
             .join("\n          ");
 
-    return [
-      periodo,
-      depDigits ? `AND HR.CODDEP = ${Number(depDigits)}` : "",
-      status !== "Todos" ? `AND NVL(FUN.LIBERADO,'N') = '${status}'` : "",
-      nome ? `AND UPPER(F.NOMEFUNC) LIKE '%' || UPPER('${nome}') || '%'` : "",
-    ]
-      .filter(Boolean)
-      .join("\n          ");
-  }, [coddep, nomeBusca, dtIni, dtFim, periodoTipo, mmYYYY, status]);
+    return [periodo, recorteSql].filter(Boolean).join("\n          ");
+  }, [dtIni, dtFim, periodoTipo, mmYYYY, recorteSql]);
 
   const carregar = useCallback(async () => {
     if (!CODUSU_SUP) {
@@ -228,21 +313,17 @@ export default function HoraExtraPage() {
           SUP.CODUSU AS CODIGO_SUPERVISOR,
           SUP.NOMEUSU AS NOME_SUPERVISOR,
           SOL.NOMEUSU AS NOME_SOLICITANTE
-        FROM AD_BANCOHORAS HR
-        JOIN AD_BCOFUN FUN ON FUN.CODBANCOHORAS = HR.CODBANCOHORAS
-        JOIN TFPFUN F ON F.CODFUNC = FUN.CODFUNC
-        JOIN TSIUSU SUP ON SUP.CODUSU = F.USUVPJSUP
-        JOIN TSIUSU SOL ON SOL.CODUSU = HR.CODUSU
+        ${FROM_HORA_EXTRA}
         LEFT JOIN TFPDEP DEP ON DEP.CODDEP = HR.CODDEP
-        WHERE (F.USUVPJSUP = ${Number(CODUSU_SUP)} OR HR.CODUSU = ${Number(CODUSU_SUP)})
+        WHERE ${escopoSupervisor(CODUSU_SUP)}
           ${filtrosSql()}
         ORDER BY HR.DTUSO DESC, F.NOMEFUNC
       `.trim();
 
       const r = await obterReg(sql);
 
-      const mapped: HoraExtraRow[] = r.map((x: any) => {
-        const ymd = String(x.DTUSO ?? "");
+      const mapped: HoraExtraRow[] = r.map((x: ErpRow) => {
+        const ymd = txt(x.DTUSO);
         return {
           codBancoHoras: Number(x.CODBANCOHORAS),
           codBcoHrFun: Number(x.CODBCOHRFUN),
@@ -268,9 +349,9 @@ export default function HoraExtraPage() {
 
       setRows(mapped);
       setSelecionados(new Set());
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("[HoraExtraPage] carregar:", e);
-      setErro(e?.message || "Falha ao carregar hora extra.");
+      setErro(mensagemErro(e, "Falha ao carregar hora extra."));
       setRows([]);
     } finally {
       setLoading(false);
@@ -296,21 +377,22 @@ export default function HoraExtraPage() {
     (async () => {
       try {
         setComparativoLoading(true);
-        // Consulta enxuta: só o necessário para somar a duração.
+        // Consulta enxuta: só o necessário para somar a duração — mas com os
+        // mesmos JOINs, escopo e recorte da lista, para os dois meses contarem
+        // o mesmo universo de registros.
         const sql = `
           SELECT HR.HRINI, HR.HRFIN
-          FROM AD_BANCOHORAS HR
-          JOIN AD_BCOFUN FUN ON FUN.CODBANCOHORAS = HR.CODBANCOHORAS
-          JOIN TFPFUN F ON F.CODFUNC = FUN.CODFUNC
-          WHERE (F.USUVPJSUP = ${Number(CODUSU_SUP)} OR HR.CODUSU = ${Number(CODUSU_SUP)})
+          ${FROM_HORA_EXTRA}
+          WHERE ${escopoSupervisor(CODUSU_SUP)}
             AND TO_CHAR(HR.DTUSO, 'MM/YYYY') = '${anterior}'
+            ${recorteSql}
         `.trim();
 
         const r = await obterReg(sql);
         if (cancelado) return;
 
         const total = r.reduce(
-          (acc: number, x: any) => acc + (duracaoMin(x.HRINI, x.HRFIN) ?? 0),
+          (acc: number, x: ErpRow) => acc + (duracaoMin(x.HRINI, x.HRFIN) ?? 0),
           0
         );
         setMinutosMesAnterior(total);
@@ -325,7 +407,7 @@ export default function HoraExtraPage() {
     return () => {
       cancelado = true;
     };
-  }, [CODUSU_SUP, mesRef, periodoTipo]);
+  }, [CODUSU_SUP, mesRef, periodoTipo, recorteSql]);
 
   /* ======================== Setores (filtro) ======================== */
   useEffect(() => {
@@ -338,9 +420,9 @@ export default function HoraExtraPage() {
         );
         if (cancelado) return;
         setDeps(
-          r.map((x: any) => ({
-            coddep: Number(x.CODDEP),
-            descrdep: String(x.DESCRDEP ?? ""),
+          r.map((x: ErpRow) => ({
+            coddep: int(x.CODDEP),
+            descrdep: txt(x.DESCRDEP),
           }))
         );
       } catch (e) {
@@ -440,14 +522,10 @@ export default function HoraExtraPage() {
             nome: item.nomefunc,
             msg: parsed.human || parsed.resumo || parsed.title,
           });
-      } catch (e: any) {
+      } catch (e: unknown) {
         falhas.push({
           nome: item.nomefunc,
-          msg:
-            e?.response?.data?.erro ||
-            e?.response?.data?.detalhe?.statusMessage ||
-            e?.message ||
-            "Falha na gravação.",
+          msg: mensagemErro(e, "Falha na gravação."),
         });
       } finally {
         setProgresso({ total: itens.length, ok, fail: falhas.length });
@@ -512,6 +590,136 @@ export default function HoraExtraPage() {
     }
   };
 
+  /* ====================== Remover colaborador ====================== */
+  const abrirRemocao = (itens: HoraExtraRow[]) => {
+    if (!itens.length) return;
+    // Só o supervisor do colaborador pode remover — mesma regra da aprovação.
+    const permitidos = itens.filter((r) => r.codigoSupervisor === CODUSU_SUP);
+    if (!permitidos.length) return;
+    setRemoverAlvo(permitidos);
+    setRemoverTurnoVazio(true);
+  };
+
+  /**
+   * Turnos que perderiam o último colaborador nesta remoção.
+   * O cabeçalho ficaria órfão: a consulta principal usa INNER JOIN em
+   * AD_BCOFUN, então um turno sem ninguém some da tela e não há como limpá-lo.
+   */
+  const turnosQueFicamVazios = useMemo(() => {
+    if (!removerAlvo.length) return [];
+    const removidosPorEvento = new Map<number, number>();
+    for (const r of removerAlvo) {
+      removidosPorEvento.set(
+        r.codBancoHoras,
+        (removidosPorEvento.get(r.codBancoHoras) ?? 0) + 1
+      );
+    }
+    return eventos.filter(
+      (e) => (removidosPorEvento.get(e.codBancoHoras) ?? 0) >= e.itens.length
+    );
+  }, [removerAlvo, eventos]);
+
+  const aprovadosNaRemocao = removerAlvo.filter((r) => r.liberado === "S").length;
+
+  const confirmarRemocao = async () => {
+    const itens = removerAlvo;
+    const falhas: Array<{ nome: string; msg: string }> = [];
+    let ok = 0;
+
+    try {
+      setRemovendo(true);
+      setProgresso({ total: itens.length, ok: 0, fail: 0 });
+
+      // Um por vez para conseguir atribuir a falha ao colaborador certo
+      // (o endpoint aceita `pks[]` em lote, mas aí o erro vem sem dono).
+      for (const item of itens) {
+        try {
+          const resp = await api.post("/api/sankhya/dataset/remove", {
+            entity: "AD_BCOFUN",
+            pks: [
+              {
+                CODBANCOHORAS: item.codBancoHoras,
+                CODBCOHRFUN: item.codBcoHrFun,
+              },
+            ],
+          });
+
+          const parsed = parseDatasetSaveResponse(resp.data);
+          if (parsed.ok) ok++;
+          else
+            falhas.push({
+              nome: item.nomefunc,
+              msg: parsed.human || parsed.resumo || parsed.title,
+            });
+        } catch (e: unknown) {
+          falhas.push({
+            nome: item.nomefunc,
+            msg: mensagemErro(e, "Falha ao remover."),
+          });
+        } finally {
+          setProgresso({ total: itens.length, ok, fail: falhas.length });
+        }
+      }
+
+      // Limpa os cabeçalhos que ficaram sem ninguém, se o usuário pediu e
+      // se todos os colaboradores daquele turno saíram de fato.
+      const turnosRemovidos: string[] = [];
+      if (removerTurnoVazio && !falhas.length) {
+        for (const evento of turnosQueFicamVazios) {
+          try {
+            await api.post("/api/sankhya/dataset/remove", {
+              entity: "AD_BANCOHORAS",
+              pks: [{ CODBANCOHORAS: evento.codBancoHoras }],
+            });
+            turnosRemovidos.push(evento.dtusoBR);
+          } catch (e: unknown) {
+            falhas.push({
+              nome: `Turno de ${evento.dtusoBR}`,
+              msg: mensagemErro(e, "Falha ao remover o turno."),
+            });
+          }
+        }
+      }
+
+      setRemoverAlvo([]);
+      setSelecionados(new Set());
+      await carregar();
+
+      if (falhas.length) {
+        mostrarRetorno({
+          title: ok ? "Removido parcialmente" : "Não foi possível remover",
+          resumo: `${ok} remoção(ões) concluída(s), ${falhas.length} com erro.`,
+          human: falhas
+            .slice(0, 10)
+            .map((f) => `• ${f.nome}: ${f.msg}`)
+            .join("\n"),
+          variant: ok ? "warning" : "destructive",
+        });
+      } else {
+        const parteColab =
+          ok === 1 ? "1 colaborador removido" : `${ok} colaboradores removidos`;
+        const parteTurno =
+          turnosRemovidos.length === 0
+            ? ""
+            : turnosRemovidos.length === 1
+              ? `. O turno de ${turnosRemovidos[0]}, que ficou vazio, também foi apagado`
+              : `. Os ${turnosRemovidos.length} turnos que ficaram vazios também foram apagados`;
+
+        mostrarRetorno({
+          title: ok === 1 ? "Colaborador removido" : "Colaboradores removidos",
+          resumo: `${parteColab} do ERP${parteTurno}.`,
+          human: itens
+            .slice(0, 10)
+            .map((i) => `• ${i.nomefunc} — ${i.dtusoBR}`)
+            .join("\n"),
+          variant: "success",
+        });
+      }
+    } finally {
+      setRemovendo(false);
+    }
+  };
+
   /* ========================= Editar evento ========================= */
   const abrirEdicao = (evento: Evento) => {
     setEditarEvento(evento);
@@ -569,15 +777,11 @@ export default function HoraExtraPage() {
         human: `${editarEvento.dtusoBR} • ${editHrIni} → ${editHrFin}`,
         variant: "success",
       });
-    } catch (e: any) {
+    } catch (e: unknown) {
       mostrarRetorno({
         title: "Falha ao atualizar horário",
         resumo: "Não foi possível gravar a alteração.",
-        human:
-          e?.response?.data?.erro ||
-          e?.response?.data?.detalhe?.statusMessage ||
-          e?.message ||
-          "Erro desconhecido.",
+        human: mensagemErro(e, "Não foi possível gravar a alteração."),
         variant: "destructive",
       });
     } finally {
@@ -604,15 +808,15 @@ export default function HoraExtraPage() {
 
       // De-dup por CODFUNC.
       const mapa = new Map<number, FuncOpt>();
-      for (const x of r as any[]) {
-        const codfunc = Number(x.CODFUNC);
+      for (const x of r as ErpRow[]) {
+        const codfunc = int(x.CODFUNC);
         if (mapa.has(codfunc)) continue;
         mapa.set(codfunc, {
           codfunc,
-          nomefunc: String(x.NOMEFUNC ?? ""),
-          coddep: Number(x.CODDEP ?? 0),
-          descrdep: String(x.DESCRDEP ?? ""),
-          descrcargo: String(x.DESCRCARGO ?? ""),
+          nomefunc: txt(x.NOMEFUNC),
+          coddep: int(x.CODDEP),
+          descrdep: txt(x.DESCRDEP),
+          descrcargo: txt(x.DESCRCARGO),
         });
       }
       setFuncs(Array.from(mapa.values()));
@@ -724,14 +928,10 @@ export default function HoraExtraPage() {
               nome: f.nomefunc,
               msg: parsedFun.human || parsedFun.resumo || parsedFun.title,
             });
-        } catch (e: any) {
+        } catch (e: unknown) {
           falhas.push({
             nome: f.nomefunc,
-            msg:
-              e?.response?.data?.erro ||
-              e?.response?.data?.detalhe?.statusMessage ||
-              e?.message ||
-              "Falha ao vincular colaborador.",
+            msg: mensagemErro(e, "Falha ao vincular colaborador."),
           });
         } finally {
           setPlanProgresso({
@@ -767,16 +967,12 @@ export default function HoraExtraPage() {
           variant: "success",
         });
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("[HoraExtraPage] salvarPlanejamento:", e);
       mostrarRetorno({
         title: "Falha ao salvar planejamento",
         resumo: "Não foi possível concluir a operação.",
-        human:
-          e?.response?.data?.erro ||
-          e?.response?.data?.detalhe?.statusMessage ||
-          e?.message ||
-          "Erro desconhecido.",
+        human: mensagemErro(e, "Não foi possível concluir a operação."),
         variant: "destructive",
       });
     } finally {
@@ -909,7 +1105,18 @@ export default function HoraExtraPage() {
             </Button>
           </>
         }
+      />
+
+      {/* Filtros + indicadores: fixos no topo enquanto a grade rola (tela larga). */}
+      <div
+        ref={fixo.ref}
+        className={cn(
+          "z-20 space-y-3",
+          fixo.ativo && "sticky top-0 -mx-6 bg-background/95 px-6 py-3 backdrop-blur transition-shadow",
+          fixo.preso && "border-b border-border shadow-card"
+        )}
       >
+      <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-3 shadow-xs">
         <Field label="Período" className="w-40">
           {(p) => (
             <Select
@@ -1007,9 +1214,21 @@ export default function HoraExtraPage() {
           <X className="h-4 w-4" />
           Limpar
         </Button>
-      </PageHeader>
+      </div>
 
       <HoraExtraResumo
+        parte="indicadores"
+        rows={rows}
+        loading={loading}
+        mesRef={mesRef}
+        minutosMesAnterior={minutosMesAnterior}
+        comparativoLoading={comparativoLoading}
+        onVerPendentes={() => setStatus("N")}
+      />
+      </div>
+
+      <HoraExtraResumo
+        parte="graficos"
         rows={rows}
         loading={loading}
         mesRef={mesRef}
@@ -1018,9 +1237,13 @@ export default function HoraExtraPage() {
         onVerPendentes={() => setStatus("N")}
       />
 
-      {/* Barra de ação em lote — aparece só quando há seleção. */}
+      {/* Barra de ação em lote — aparece só quando há seleção. Gruda logo abaixo
+          do bloco fixo (ou no topo, quando ele não está fixo). */}
       {selecionadosRows.length > 0 ? (
-        <div className="sticky top-16 z-20 flex flex-wrap items-center gap-3 rounded-xl border border-accent/30 bg-accent-subtle p-3 shadow-card">
+        <div
+          className="sticky z-10 flex flex-wrap items-center gap-3 rounded-xl border border-accent/30 bg-accent-subtle p-3 shadow-card"
+          style={{ top: (fixo.ativo ? fixo.altura : 0) + 8 }}
+        >
           <Badge variant="accent">{selecionadosRows.length} selecionado(s)</Badge>
           <span className="tabular text-2xs text-muted-foreground">
             {formatDuracao(
@@ -1037,6 +1260,15 @@ export default function HoraExtraPage() {
               onClick={() => setSelecionados(new Set())}
             >
               Limpar seleção
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => abrirRemocao(selecionadosRows)}
+              className="text-destructive hover:bg-destructive-subtle"
+            >
+              <Trash2 className="h-4 w-4" />
+              Remover
             </Button>
             <Button size="sm" onClick={() => abrirAprovacao(selecionadosRows)}>
               <CheckCircle2 className="h-4 w-4" />
@@ -1076,7 +1308,8 @@ export default function HoraExtraPage() {
               onAprovarSelecionados={abrirAprovacao}
               onReverter={reverter}
               onEditar={abrirEdicao}
-              ocupado={processando || salvandoEdicao}
+              onRemover={abrirRemocao}
+              ocupado={processando || salvandoEdicao || removendo}
             />
           ))}
         </div>
@@ -1134,6 +1367,110 @@ export default function HoraExtraPage() {
                 <>
                   <CheckCircle2 className="h-4 w-4" />
                   Confirmar aprovação
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ==================== Remover do turno ==================== */}
+      <Dialog
+        open={removerAlvo.length > 0}
+        onOpenChange={(v) => (removendo || v ? null : setRemoverAlvo([]))}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {removerAlvo.length === 1
+                ? `Remover ${removerAlvo[0].nomefunc} do turno`
+                : `Remover ${removerAlvo.length} colaboradores do turno`}
+            </DialogTitle>
+            <DialogDescription>
+              {removerAlvo.length === 1 ? "O registro é excluído" : "Os registros são excluídos"}{" "}
+              do ERP. Esta ação não pode ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+
+          <ul className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border bg-muted/40 p-3 scrollbar-slim">
+            {removerAlvo.slice(0, 40).map((r) => (
+              <li
+                key={rowKey(r)}
+                className="flex items-center justify-between gap-3 text-2xs"
+              >
+                <span className="truncate text-foreground">{r.nomefunc}</span>
+                <span className="tabular flex shrink-0 items-center gap-1.5 text-muted-foreground">
+                  {r.dtusoBR}
+                  {r.liberado === "S" ? (
+                    <Badge variant="success">aprovado</Badge>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+            {removerAlvo.length > 40 ? (
+              <li className="text-2xs text-muted-foreground">
+                +{removerAlvo.length - 40} colaborador(es)
+              </li>
+            ) : null}
+          </ul>
+
+          {aprovadosNaRemocao > 0 ? (
+            <p className="rounded-lg border border-warning/25 bg-warning-subtle px-3 py-2 text-2xs text-foreground">
+              {removerAlvo.length === 1
+                ? "Esta hora extra já está aprovada."
+                : aprovadosNaRemocao === 1
+                  ? "Uma destas horas extras já está aprovada."
+                  : `${aprovadosNaRemocao} destas horas extras já estão aprovadas.`}{" "}
+              Remover apaga horas já liberadas para pagamento.
+            </p>
+          ) : null}
+
+          {turnosQueFicamVazios.length > 0 ? (
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border p-3">
+              <input
+                type="checkbox"
+                checked={removerTurnoVazio}
+                onChange={(e) => setRemoverTurnoVazio(e.target.checked)}
+                disabled={removendo}
+                className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-input accent-[hsl(var(--primary))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <span className="text-2xs text-foreground">
+                Apagar também{" "}
+                {turnosQueFicamVazios.length === 1
+                  ? `o turno de ${turnosQueFicamVazios[0].dtusoBR}`
+                  : `os ${turnosQueFicamVazios.length} turnos`}
+                , que {turnosQueFicamVazios.length === 1 ? "ficará" : "ficarão"}{" "}
+                sem nenhum colaborador.
+                <span className="mt-1 block text-muted-foreground">
+                  Um turno vazio deixa de aparecer nesta tela e não há como
+                  removê-lo depois.
+                </span>
+              </span>
+            </label>
+          ) : null}
+
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setRemoverAlvo([])}
+              disabled={removendo}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmarRemocao}
+              disabled={removendo}
+            >
+              {removendo ? (
+                <>
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                  Removendo {progresso.ok}/{progresso.total}
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4" />
+                  Remover
                 </>
               )}
             </Button>
