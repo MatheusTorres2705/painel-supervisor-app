@@ -5,8 +5,14 @@
 // A LÓGICA está linha a linha igual à de lá: os SQLs (view AD_VFALTA +
 // TFPFUN), a taxa (HH perdido ÷ HH disponível), a série de 12 meses, o drill
 // gerente → supervisor → colaborador → dias e a análise de reincidência.
-// Os dados são da empresa toda, como na diretoria — sem recorte pelo
-// supervisor logado.
+//
+// DIFERENÇA DE LÓGICA: filtro "Apenas meus colaboradores" (não existe lá).
+// Ligado, TODAS as consultas ficam restritas aos colaboradores cujo supervisor
+// no cadastro é o usuário logado (TFPFUN.USUVPJSUP) — o mesmo critério de
+// Equipe, Pirâmide e Hora Extra. Inclui o denominador: o HH disponível passa a
+// contar só a equipe, senão a % seria faltas da equipe ÷ efetivo da empresa.
+// É o supervisor de HOJE no cadastro: em meses passados aparecem as faltas de
+// quem está na equipe agora, não de quem estava na época.
 //
 // A INTERFACE foi portada para o design system deste projeto. Diferenças:
 //  · tipos: `unknown`/ErpRow no lugar de `any` (lint deste projeto);
@@ -22,6 +28,8 @@ import {
 } from "recharts";
 import { UserX, Users, CalendarX, Hourglass, Percent, ChevronLeft, TrendingUp, BarChart3 } from "lucide-react";
 
+import { useAuth } from "@/auth/AuthProvider";
+
 import { obterReg } from "@/lib/obterReg";
 import { int, hours as fmtHours, pct as fmtPct } from "@/lib/formatDiretoria";
 import { MESES_CURTO, MESES_LONGO } from "@/lib/datetime";
@@ -32,6 +40,7 @@ import { cn } from "@/lib/utils";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Chip } from "@/components/ui/chip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -63,6 +72,25 @@ const taxaAbs = (hhFalta: number, hhDisp: number) => (hhDisp > 0 ? (hhFalta / hh
 // Condição "colaborador disponível no dia D" (DTADM ≤ D e não demitido até D)
 const ATIVO_NO_DIA = (col: string) => `TRUNC(F.DTADM) <= ${col} AND (F.DTDEM IS NULL OR TRUNC(F.DTDEM) >= ${col})`;
 
+/* ── Escopo "Apenas meus colaboradores" (só neste painel) ──────────
+   `sup` = CODUSU do supervisor logado, ou null para a empresa toda.
+   O casamento com AD_VFALTA é por CODFUNC, igual ao JOIN que já existia em
+   FROM_BASE. */
+type Sup = number | null;
+/** Para consultas que já têm TFPFUN com alias. */
+const escopoFun = (alias: string, sup: Sup) => (sup == null ? "" : ` AND ${alias}.USUVPJSUP = ${Number(sup)}`);
+/** Para consultas só em AD_VFALTA. */
+const escopoFalta = (col: string, sup: Sup) =>
+  sup == null ? "" : ` AND ${col} IN (SELECT CODFUNC FROM TFPFUN WHERE USUVPJSUP = ${Number(sup)})`;
+
+const CHAVE_MEUS = "absenteismo:apenas-meus";
+function lerMeus(): boolean {
+  try { return localStorage.getItem(CHAVE_MEUS) !== "0"; } catch { return true; }
+}
+function gravarMeus(v: boolean) {
+  try { localStorage.setItem(CHAVE_MEUS, v ? "1" : "0"); } catch { /* armazenamento bloqueado: só não lembra */ }
+}
+
 /* Cores do gráfico: os papéis de lá (CHART.warn/ink2/ink3) em tokens daqui. */
 const COR = {
   taxa: chartSemantic.warning,
@@ -73,18 +101,19 @@ const COR = {
 
 /* ===================== SQL (view AD_VFALTA + TFPFUN) ===================== */
 // Faltas mês a mês (efetivo/HH disponível vem de SQL_EFETIVO_MENSAL)
-const SQL_MENSAL = `
+const makeSqlMensal = (sup: Sup) => `
 SELECT ANOREF, MESREF,
   COUNT(DISTINCT CODFUNC) AS FALTANTES,
   COUNT(*)                AS FALTAS,
   SUM(HH_PERDIDO)         AS HH_PERDIDO
 FROM AD_VFALTA
+WHERE 1 = 1${escopoFalta("CODFUNC", sup)}
 GROUP BY ANOREF, MESREF
 ORDER BY ANOREF, TO_NUMBER(MESREF)
 `;
 
 // Efetivo disponível por mês — dias úteis (seg–sex) × ativos no dia (DTADM/DTDEM)
-const makeSqlEfetivoMensal = (ini: string, fim: string) => `
+const makeSqlEfetivoMensal = (ini: string, fim: string, sup: Sup) => `
 WITH DIAS AS (
   SELECT D FROM (
     SELECT ${oracleData(ini)} + LEVEL - 1 AS D
@@ -95,7 +124,7 @@ WITH DIAS AS (
 EFETIVO AS (
   SELECT D.D, COUNT(*) AS ATIVOS
   FROM DIAS D
-  JOIN TFPFUN F ON ${ATIVO_NO_DIA("D.D")}
+  JOIN TFPFUN F ON ${ATIVO_NO_DIA("D.D")}${escopoFun("F", sup)}
   GROUP BY D.D
 )
 SELECT TO_CHAR(D,'YYYY') AS ANOREF, TO_CHAR(D,'MM') AS MESREF,
@@ -108,49 +137,49 @@ ORDER BY 1, 2
 `;
 
 // Diário — faltas por dia + ativos no próprio dia (DTADM/DTDEM)
-const makeSqlDia = (ini: string, fim: string) => `
+const makeSqlDia = (ini: string, fim: string, sup: Sup) => `
 SELECT g.DIA, g.FALTAS, g.HH_PERDIDO,
-  (SELECT COUNT(*) FROM TFPFUN F WHERE ${ATIVO_NO_DIA("g.DT")}) AS ATIVOS,
-  ROUND(100 * g.FALTAS / NULLIF((SELECT COUNT(*) FROM TFPFUN F WHERE ${ATIVO_NO_DIA("g.DT")}),0), 2) AS PCT_ABSENTEISMO
+  (SELECT COUNT(*) FROM TFPFUN F WHERE ${ATIVO_NO_DIA("g.DT")}${escopoFun("F", sup)}) AS ATIVOS,
+  ROUND(100 * g.FALTAS / NULLIF((SELECT COUNT(*) FROM TFPFUN F WHERE ${ATIVO_NO_DIA("g.DT")}${escopoFun("F", sup)}),0), 2) AS PCT_ABSENTEISMO
 FROM (
   SELECT TRUNC(DTREF) AS DT, TO_CHAR(DTREF,'DD/MM/YYYY') AS DIA,
     COUNT(*) AS FALTAS, SUM(HH_PERDIDO) AS HH_PERDIDO
   FROM AD_VFALTA
-  WHERE TRUNC(DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}
+  WHERE TRUNC(DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFalta("CODFUNC", sup)}
   GROUP BY TRUNC(DTREF), TO_CHAR(DTREF,'DD/MM/YYYY')
 ) g
 ORDER BY g.DT
 `;
 
-const FROM_BASE = (ini: string, fim: string) => `
+const FROM_BASE = (ini: string, fim: string, sup: Sup) => `
 FROM AD_VFALTA v
 JOIN TFPFUN f ON f.CODFUNC = v.CODFUNC
-WHERE TRUNC(v.DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}`;
+WHERE TRUNC(v.DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFun("f", sup)}`;
 const GERENTE_EXPR = `NVL(f.AD_GERENTE,'(sem gerente)')`;
 const SUPERVISOR_EXPR = `NVL(v.GESTOR,'(sem gestor)')`;
 const METRICAS = `COUNT(*) AS FALTAS, COUNT(DISTINCT v.CODFUNC) AS FALTANTES, SUM(v.HH_PERDIDO) AS HH_PERDIDO`;
 
 // Nível 0 — por gerente
-const makeSqlGerentes = (ini: string, fim: string) => `
+const makeSqlGerentes = (ini: string, fim: string, sup: Sup) => `
 SELECT ${GERENTE_EXPR} AS GERENTE, ${METRICAS}
-${FROM_BASE(ini, fim)}
+${FROM_BASE(ini, fim, sup)}
 GROUP BY ${GERENTE_EXPR}
 ORDER BY FALTAS DESC
 `;
 
 // Nível 1 — supervisores de um gerente
-const makeSqlSupervisores = (ini: string, fim: string, gerente: string) => `
+const makeSqlSupervisores = (ini: string, fim: string, gerente: string, sup: Sup) => `
 SELECT ${SUPERVISOR_EXPR} AS SUPERVISOR, ${METRICAS}
-${FROM_BASE(ini, fim)}
+${FROM_BASE(ini, fim, sup)}
   AND ${GERENTE_EXPR} = '${esc(gerente)}'
 GROUP BY ${SUPERVISOR_EXPR}
 ORDER BY FALTAS DESC
 `;
 
 // Nível 2 — colaboradores de gerente + supervisor
-const makeSqlFuncionarios = (ini: string, fim: string, gerente: string, supervisor: string) => `
+const makeSqlFuncionarios = (ini: string, fim: string, gerente: string, supervisor: string, sup: Sup) => `
 SELECT v.CODFUNC, v.NOMEFUNC, COUNT(*) AS FALTAS, SUM(v.HH_PERDIDO) AS HH_PERDIDO
-${FROM_BASE(ini, fim)}
+${FROM_BASE(ini, fim, sup)}
   AND ${GERENTE_EXPR} = '${esc(gerente)}'
   AND ${SUPERVISOR_EXPR} = '${esc(supervisor)}'
 GROUP BY v.CODFUNC, v.NOMEFUNC
@@ -167,18 +196,18 @@ ORDER BY DTREF
 `;
 
 // Análise do mês — colaboradores que mais faltaram (com gerente/supervisor)
-const makeSqlTopMes = (ini: string, fim: string) => `
+const makeSqlTopMes = (ini: string, fim: string, sup: Sup) => `
 SELECT v.CODFUNC, v.NOMEFUNC, ${GERENTE_EXPR} AS GERENTE, ${SUPERVISOR_EXPR} AS SUPERVISOR,
   COUNT(*) AS FALTAS, SUM(v.HH_PERDIDO) AS HH_PERDIDO
-${FROM_BASE(ini, fim)}
+${FROM_BASE(ini, fim, sup)}
 GROUP BY v.CODFUNC, v.NOMEFUNC, ${GERENTE_EXPR}, ${SUPERVISOR_EXPR}
 ORDER BY FALTAS DESC
 `;
 // Reincidência — faltas por colaborador por mês (janela do histórico)
-const makeSqlReincidencia = (ini: string, fim: string) => `
+const makeSqlReincidencia = (ini: string, fim: string, sup: Sup) => `
 SELECT CODFUNC, ANOREF, MESREF, COUNT(*) AS FALTAS
 FROM AD_VFALTA
-WHERE TRUNC(DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}
+WHERE TRUNC(DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFalta("CODFUNC", sup)}
 GROUP BY CODFUNC, ANOREF, MESREF
 `;
 
@@ -346,6 +375,13 @@ function Secao({ titulo, children, semPadding }: { titulo: string; children: Rea
 const HOJE = new Date();
 
 export default function AbsenteismoPage() {
+  const { user } = useAuth();
+  const codusu = user?.codusu != null && Number.isFinite(Number(user.codusu)) ? Number(user.codusu) : null;
+  const [apenasMeus, setApenasMeus] = React.useState(lerMeus);
+  const trocarEscopo = (v: boolean) => { setApenasMeus(v); gravarMeus(v); };
+  // Sem usuário identificado não há como recortar: cai na empresa toda e o chip some.
+  const sup: Sup = apenasMeus && codusu != null ? codusu : null;
+
   const [ano, setAno] = React.useState(HOJE.getFullYear());
   const [mes, setMes] = React.useState(HOJE.getMonth() + 1);
 
@@ -373,8 +409,8 @@ export default function AbsenteismoPage() {
       const efFim = `${pad2(HOJE.getDate())}/${pad2(HOJE.getMonth() + 1)}/${HOJE.getFullYear()}`;
       try {
         const [faltaRaw, efRaw] = await Promise.all([
-          obterReg(SQL_MENSAL, { pageSize: 5000, maxPages: 5 }),
-          obterReg(makeSqlEfetivoMensal(efIni, efFim), { pageSize: 5000, maxPages: 5 }),
+          obterReg(makeSqlMensal(sup), { pageSize: 5000, maxPages: 5 }),
+          obterReg(makeSqlEfetivoMensal(efIni, efFim, sup), { pageSize: 5000, maxPages: 5 }),
         ]);
         if (!alive) return;
         setMensalAll(faltaRaw.map(r => ({
@@ -391,7 +427,7 @@ export default function AbsenteismoPage() {
       finally { if (alive) setLoadingMensal(false); }
     })();
     return () => { alive = false; };
-  }, []);
+  }, [sup]);
   const efDoMes = (a: number, m: number) => efetivoMap.get(`${a}-${pad2(m)}`);
 
   // Diário + gerentes — ao mudar período
@@ -401,8 +437,8 @@ export default function AbsenteismoPage() {
       setLoading(true); setErr(null);
       try {
         const [diaRaw, gerRaw] = await Promise.all([
-          obterReg(makeSqlDia(ini, fim), { pageSize: 5000, maxPages: 5 }),
-          obterReg(makeSqlGerentes(ini, fim), { pageSize: 5000, maxPages: 5 }),
+          obterReg(makeSqlDia(ini, fim, sup), { pageSize: 5000, maxPages: 5 }),
+          obterReg(makeSqlGerentes(ini, fim, sup), { pageSize: 5000, maxPages: 5 }),
         ]);
         if (!alive) return;
         setDias(diaRaw.map(r => ({
@@ -420,7 +456,7 @@ export default function AbsenteismoPage() {
       } finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
-  }, [ini, fim]);
+  }, [ini, fim, sup]);
 
   // KPIs do mês
   const mesAtual = React.useMemo(() => mensalAll.find(r => r.ano === ano && r.mes === mes), [mensalAll, ano, mes]);
@@ -471,7 +507,7 @@ export default function AbsenteismoPage() {
     (async () => {
       setSupLoading(true); setSupRows([]);
       try {
-        const raw = await obterReg(makeSqlSupervisores(ini, fim, dGerente), { pageSize: 5000, maxPages: 5 });
+        const raw = await obterReg(makeSqlSupervisores(ini, fim, dGerente, sup), { pageSize: 5000, maxPages: 5 });
         if (alive) setSupRows(raw.map(r => {
           const sup = s(getAny(r, "SUPERVISOR")) || "(sem gestor)";
           return { key: sup, label: sup, faltas: n(getAny(r, "FALTAS")), faltantes: n(getAny(r, "FALTANTES")), hh: n(getAny(r, "HH_PERDIDO")), onClick: () => { setDSupervisor(sup); setDColab(null); } };
@@ -480,7 +516,7 @@ export default function AbsenteismoPage() {
       finally { if (alive) setSupLoading(false); }
     })();
     return () => { alive = false; };
-  }, [dGerente, ini, fim]);
+  }, [dGerente, ini, fim, sup]);
 
   React.useEffect(() => {
     if (!dGerente || !dSupervisor) return;
@@ -488,7 +524,7 @@ export default function AbsenteismoPage() {
     (async () => {
       setFuncLoading(true); setFuncRows([]);
       try {
-        const raw = await obterReg(makeSqlFuncionarios(ini, fim, dGerente, dSupervisor), { pageSize: 5000, maxPages: 10 });
+        const raw = await obterReg(makeSqlFuncionarios(ini, fim, dGerente, dSupervisor, sup), { pageSize: 5000, maxPages: 10 });
         if (alive) setFuncRows(raw.map(r => {
           const cod = n(getAny(r, "CODFUNC")); const nome = s(getAny(r, "NOMEFUNC")) || `#${cod}`;
           return { key: String(cod), label: nome, sub: `#${cod}`, faltas: n(getAny(r, "FALTAS")), hh: n(getAny(r, "HH_PERDIDO")), onClick: () => setDColab({ codfunc: cod, nome }) };
@@ -497,7 +533,7 @@ export default function AbsenteismoPage() {
       finally { if (alive) setFuncLoading(false); }
     })();
     return () => { alive = false; };
-  }, [dGerente, dSupervisor, ini, fim]);
+  }, [dGerente, dSupervisor, ini, fim, sup]);
 
   React.useEffect(() => {
     if (!dColab) return;
@@ -546,8 +582,8 @@ export default function AbsenteismoPage() {
       setAnaliseLoading(true);
       try {
         const [topRaw, reincRaw] = await Promise.all([
-          obterReg(makeSqlTopMes(ini, fim), { pageSize: 5000, maxPages: 20 }),
-          obterReg(makeSqlReincidencia(iniHist, fim), { pageSize: 5000, maxPages: 40 }),
+          obterReg(makeSqlTopMes(ini, fim, sup), { pageSize: 5000, maxPages: 20 }),
+          obterReg(makeSqlReincidencia(iniHist, fim, sup), { pageSize: 5000, maxPages: 40 }),
         ]);
         if (!alive) return;
         setTopRows(topRaw.map(r => ({
@@ -567,7 +603,7 @@ export default function AbsenteismoPage() {
       finally { if (alive) setAnaliseLoading(false); }
     })();
     return () => { alive = false; };
-  }, [analiseOpen, ini, fim, iniHist]);
+  }, [analiseOpen, ini, fim, iniHist, sup]);
 
   const botaoVoltar = "mb-3 inline-flex items-center gap-1 rounded-sm text-xs text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -595,9 +631,30 @@ export default function AbsenteismoPage() {
             </div>
           </>
         }
-      />
+      >
+        {codusu != null && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Colaboradores">
+              <Chip ativo={sup != null} onClick={() => trocarEscopo(true)}>Apenas meus colaboradores</Chip>
+              <Chip ativo={sup == null} onClick={() => trocarEscopo(false)}>Todos</Chip>
+            </div>
+            <span className="text-2xs text-muted-foreground">
+              {sup != null
+                ? `Supervisor no cadastro: ${user?.name || `usuário ${codusu}`}`
+                : "Empresa toda"}
+            </span>
+          </div>
+        )}
+      </PageHeader>
 
       {err && <Alert variant="destructive" title="Falha ao carregar">{err}</Alert>}
+
+      {sup != null && !loadingMensal && efetivoMap.size === 0 && (
+        <Alert variant="info" title="Nenhum colaborador na sua equipe">
+          Não há colaboradores ativos com você como supervisor no cadastro (TFPFUN.USUVPJSUP) desde janeiro do ano passado.
+          Selecione “Todos” para ver a empresa toda.
+        </Alert>
+      )}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 2xl:grid-cols-5">
@@ -689,6 +746,7 @@ export default function AbsenteismoPage() {
 
       <p className="text-xs text-muted-foreground">
         <b>% Absenteísmo</b> = HH perdido ÷ HH disponível. <b>HH disponível</b> = soma, por dia útil (seg–sex), dos colaboradores ativos no dia × 8h — efetivo real via <span className="font-mono">TFPFUN.DTADM/DTDEM</span> (não conta demitidos/futuros; feriados não descontados). Faltas: view <span className="font-mono">AD_VFALTA</span>. Ranking por <b>AD_GERENTE</b> → supervisores → colaboradores → dias.
+        {sup != null && <> <b>Apenas meus colaboradores</b>: faltas e efetivo só de quem tem você como supervisor no cadastro hoje (<span className="font-mono">TFPFUN.USUVPJSUP</span>) — em meses passados, a equipe atual.</>}
       </p>
 
       {/* Drill-down */}
