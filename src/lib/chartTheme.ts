@@ -82,3 +82,8 @@ export const barRadius = {
   vertical: [6, 6, 0, 0] as [number, number, number, number],
   horizontal: [0, 6, 6, 0] as [number, number, number, number],
 };
+
+/** ChartPanels: largura do eixo Y nos dois painéis. Igual = colunas alinhadas. */
+export const PANEL_Y_WIDTH = 56;
+/** ChartPanels: margem lateral idêntica nos dois painéis. */
+export const PANEL_MARGIN = { top: 8, right: 16, left: 8, bottom: 0 } as const;

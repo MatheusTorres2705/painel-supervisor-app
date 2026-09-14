@@ -114,8 +114,10 @@ export function StatCard({
           )}
         </div>
 
+        {/* Sem ícone abaixo de sm: com dois cartões por linha num celular, os
+            40px do ícone deixavam ~80px para o valor e "1,39%" invadia o ícone. */}
         {Icon ? (
-          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent-subtle text-accent">
+          <span className="hidden h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent-subtle text-accent sm:grid">
             <Icon className="h-5 w-5" aria-hidden="true" />
           </span>
         ) : null}

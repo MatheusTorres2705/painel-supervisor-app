@@ -18,6 +18,7 @@ import AlocacaoPage from "@/pages/AlocacaoPage";
 import MateriaisPage from "@/pages/MateriaisPage";
 import CalendarioPage from "@/pages/CalendarioPage";
 import HoraExtraPage from "@/pages/HoraExtraPage";
+import AbsenteismoPage from "@/pages/AbsenteismoPage";
 import PlanoAcaoPage from "@/pages/PlanoAcaoPage";
 
 export default function App() {
@@ -54,6 +55,7 @@ export default function App() {
               <Route path="/materiais" element={<MateriaisPage />} />
               <Route path="/calendario" element={<CalendarioPage />} />
               <Route path="/hora-extra" element={<HoraExtraPage />} />
+              <Route path="/absenteismo" element={<AbsenteismoPage />} />
               <Route path="/plano-acao" element={<PlanoAcaoPage />} />
             </Route>
 

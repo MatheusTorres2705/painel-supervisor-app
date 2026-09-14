@@ -11,6 +11,7 @@ import {
   PackageSearch,
   Target,
   Timer,
+  UserX,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -35,6 +36,7 @@ export const navItems: NavItem[] = [
   { path: "/materiais", label: "Materiais", icon: PackageSearch, hint: "Planejamento de materiais" },
   { path: "/calendario", label: "Calendário", icon: CalendarDays, hint: "Agenda de entregas" },
   { path: "/hora-extra", label: "Hora Extra", icon: Timer, hint: "Aprovação de horas extras" },
+  { path: "/absenteismo", label: "Absenteísmo", icon: UserX, hint: "Faltas, HH perdido e reincidência" },
   { path: "/plano-acao", label: "Plano de Ação", icon: KanbanSquare, hint: "Quadro de ações" },
 ];
 
