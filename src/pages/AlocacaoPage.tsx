@@ -1,1798 +1,586 @@
 // src/pages/AlocacaoPage.tsx
-// npm install jspdf jspdf-autotable
-
-import React, { useEffect, useMemo, useState } from "react";
+// Alocação de Recursos da OP — planejamento das demandas por colaborador e dia.
+//
+// A página só guarda o estado e compõe as partes:
+//  · dados e gravação ........ services/alocacaoService
+//  · regras (carga, folga, distribuição, Gantt) ... components/alocacao/planejamento
+//  · quadro, grade, lote, Gantt e diálogos ........ components/alocacao/*
+//
+// Pendência conhecida: o app usa BrowserRouter (sem useBlocker), então sair
+// para outra rota do painel com alterações não salvas não pede confirmação —
+// só fechar/recarregar a aba avisa (beforeunload).
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
-import { obterReg } from "@/lib/obterReg";
-import { api } from "@/lib/api";
-import { useAuth } from "@/auth/AuthProvider";
+import { ClipboardList, Download, FileText, RefreshCw, Save, Search, Settings2, Sparkles } from "lucide-react";
 
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import * as Dialog from "@radix-ui/react-dialog";
 import {
-  X,
-  Download,
-  Save,
-  FileText,
-  ChevronsUpDown,
-  Check,
-  ClipboardList,
-} from "lucide-react";
+  getCargaExterna,
+  getColaboradores,
+  getDemandas,
+  salvarAlocacoes,
+  trocarColaboradorErp,
+  type CargaExterna,
+  type Colab,
+  type Demanda,
+  type ItemErp,
+  type ResultadoGravacao,
+} from "@/services/alocacaoService";
+import { PageHeader } from "@/components/patterns/PageHeader";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Chip } from "@/components/ui/chip";
+import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { useToast } from "@/components/ui/use-toast";
+import { isoLocal } from "@/lib/datetime";
+import { num, toBR } from "@/lib/format";
+import { mensagemErro } from "@/lib/sankhyaRetorno";
 
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
-import { cn } from "@/lib/utils";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { AcaoLoteBar } from "@/components/alocacao/AcaoLoteBar";
+import { AlocacaoResumo, type Resumo } from "@/components/alocacao/AlocacaoResumo";
+import { BacklogDialog } from "@/components/alocacao/BacklogDialog";
+import { CapacidadeDialog } from "@/components/alocacao/CapacidadeDialog";
+import { ColabDetalheDialog } from "@/components/alocacao/ColabDetalheDialog";
+import { DemandasTable } from "@/components/alocacao/DemandasTable";
+import { DistribuicaoDialog } from "@/components/alocacao/DistribuicaoDialog";
+import { FalhasGravacaoDialog } from "@/components/alocacao/FalhasGravacaoDialog";
+import { GanttDia } from "@/components/alocacao/GanttDia";
+import { QuadroCarga } from "@/components/alocacao/QuadroCarga";
+import { exportarCsv, exportarPdf } from "@/components/alocacao/exportar";
+import {
+  MAX_DIAS_QUADRO,
+  atrasoDias,
+  capacidadeDoDia,
+  celula,
+  diasDoPeriodo,
+  gravarCapacidade,
+  horasPorAlocado,
+  indexarCarga,
+  lerCapacidade,
+  ordenarDemandas,
+  passaStatus,
+  pendente,
+  soDataAlterada,
+  somarDias,
+  sugerirDistribuicao,
+  type OrdemDemandas,
+  type StatusFiltro,
+  type Sugestao,
+} from "@/components/alocacao/planejamento";
 
-/* =================== Tipos =================== */
-type Etapa = "LAM" | "MON" | "PINT" | "ELE" | "ACB";
+const STATUS: { v: StatusFiltro; label: string }[] = [
+  { v: "todas", label: "Todas" },
+  { v: "sem", label: "Sem alocação" },
+  { v: "alocadas", label: "Alocadas" },
+  { v: "atrasadas", label: "Atrasadas" },
+  { v: "pendentes", label: "Não salvas" },
+];
 
-type Atividade = {
-  id: number;
-  nome: string;
-  etapa: Etapa;
-  hhPrev: number; // horas totais da atividade
-
-  // ✅ NOVO: separa data da DEMANDA x data do PLANEJAMENTO
-  dtDemanda: string; // YYYY-MM-DD (data prevista/demanda do cronograma)
-  dtPlan: string; // YYYY-MM-DD (data do planejamento — DTPLANEJAMENTO)
-
-  alocados: number[]; // lista de CODFUNC alocados
-
-  // Campos ERP para salvar em AD_DETALCRONOGRAMAFUNC
-  codusu: number; // CODUSU do cronograma (setor)
-  setor: string; // NOMEUSU (setor)
-  codprod: number;
-  seq: number; // SEQ do cronograma
-  tempoMin: number; // QTD original em minutos
-};
-
-type AtividadeERP = {
-  seq: number;
-  dt: string; // DTPLANEJAMENTO
-  codprod: number;
-  descrprod: string;
-  qtd: number; // minutos (QTD)
-  codusu: number;
-  sequencia: number;
-};
-
-type Colab = {
-  id: number;
-  nome: string;
-  cargo: string;
-  codSetor: number; // ✅ CAR.AD_CODUSU (setor do colaborador)
-  senior: "Júnior" | "Pleno" | "Sênior";
-  atividadesERP: AtividadeERP[];
-};
-
-/* =================== Utils =================== */
-
-function toSankhyaDate(ymd: string): string {
-  if (!ymd) return "";
-  const [y, m, d] = ymd.split("-");
-  if (!y || !m || !d) return ymd;
-  return `${d}/${m}/${y}`; // DD/MM/YYYY
-}
-
-const toBR = (ymd: string) => {
-  if (!ymd) return "-";
-  const [y, m, d] = ymd.split("-");
-  if (!y || !m || !d) return ymd;
-  return `${d}/${m}/${y}`;
-};
-
-const initials = (n: string) =>
-  n
-    .split(" ")
-    .map((s) => s[0])
-    .slice(0, 2)
-    .join("");
-
-/** Gantt em horas */
-const HORA_INI = 7;
-const HORA_FIM = 17;
-const TOTAL_HORAS = HORA_FIM - HORA_INI;
-const hourTicks = Array.from({ length: TOTAL_HORAS }, (_, i) => HORA_INI + i);
-
-/* Habilidades (visual) */
-const habilidadesPorCargo: Record<string, string[]> = {
-  Colaborador: ["Operação geral", "Trabalho em equipe"],
-  Montadora: ["Montagem de painéis", "Fixação estrutural", "Leitura de desenho"],
-  Montagem: ["Montagem geral", "Ajustes finos", "Selagem"],
-  Elétrica: ["Passagem de chicotes", "Crimpagem", "Teste elétrico"],
-  Pintura: ["Preparação/Lixa", "Primer/Gel Coat", "Acabamento/Polimento"],
-  Acabamento: ["Instalação de teca", "Estofaria", "Ajustes de portas"],
-};
-
-/* ===== Gantt helpers ===== */
-type GanttBlock = {
-  atividadeId: number;
-  label: string;
-  start: number;
-  end: number;
-  etapa: Etapa;
-};
-
-const etapaColor: Record<Etapa, string> = {
-  LAM: "bg-emerald-500",
-  MON: "bg-sky-500",
-  PINT: "bg-fuchsia-500",
-  ELE: "bg-amber-500",
-  ACB: "bg-chart-4",
-};
-
-const etapaBadgeStyles: Record<Etapa, string> = {
-  LAM: "bg-emerald-100 text-emerald-800 border-emerald-200",
-  MON: "bg-sky-100 text-sky-800 border-sky-200",
-  PINT: "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
-  ELE: "bg-amber-100 text-amber-800 border-amber-200",
-  ACB: "bg-muted text-foreground border-border",
-};
-
-// deduz etapa das atividades do ERP, usando o cargo do colaborador
-function etapaFromCargo(cargo: string): Etapa {
-  const up = (cargo || "").toUpperCase();
-  if (up.includes("LAM")) return "LAM";
-  if (up.includes("PINT")) return "PINT";
-  if (up.includes("ELE")) return "ELE";
-  if (up.includes("ACAB")) return "ACB";
-  return "MON"; // padrão
-}
-
-// ✅ Agora o Gantt é por DIA DE PLANEJAMENTO (dtPlan / DTPLANEJAMENTO)
-function buildBlocksForColab(
-  atividadesTela: Atividade[],
-  colab: Colab,
-  diaPlanejamento: string
-): GanttBlock[] {
-  const tarefas: { atividadeId: number; label: string; etapa: Etapa; hh: number }[] = [];
-
-  // 1) Atividades alocadas na TELA (somente do dia selecionado)
-  atividadesTela
-    .filter((a) => a.dtPlan === diaPlanejamento)
-    .filter((a) => a.alocados.includes(colab.id))
-    .forEach((a) => {
-      const qtdColabs = a.alocados.length || 1;
-      const hhShare = a.hhPrev / qtdColabs;
-      const hh = Math.max(0.25, Math.round(hhShare * 10) / 10);
-      tarefas.push({ atividadeId: a.id, label: a.nome, etapa: a.etapa, hh });
-    });
-
-  // 2) Atividades já planejadas no ERP (somente do dia selecionado)
-  const etapaErp = etapaFromCargo(colab.cargo);
-  (colab.atividadesERP || [])
-    .filter((p) => p.dt === diaPlanejamento)
-    .forEach((p, idx) => {
-      const hh = Math.max(0.5, Math.round((p.qtd / 60) * 10) / 10);
-      tarefas.push({
-        atividadeId: 100000 + colab.id * 1000 + idx,
-        label: `${p.codprod} - ${p.descrprod} (ERP)`,
-        etapa: etapaErp,
-        hh,
-      });
-    });
-
-  // 3) Distribuir sequencialmente das 07 às 17
-  let cursor = HORA_INI;
-  const blocks: GanttBlock[] = [];
-
-  for (const t of tarefas) {
-    if (cursor >= HORA_FIM) break;
-    const dur = Math.max(0.25, Math.min(t.hh, HORA_FIM - cursor));
-    const start = cursor;
-    const end = Math.min(HORA_FIM, start + dur);
-
-    blocks.push({ atividadeId: t.atividadeId, label: t.label, start, end, etapa: t.etapa });
-    cursor = end;
-  }
-
-  return blocks;
-}
-
-/* ====== Logo em base64 para o PDF (troque pela sua) ====== */
-const LOGO_BASE64 = "data:image/png;base64,SEU_LOGO_AQUI";
-
-/* ====== Componente de seleção multi-colaborador ====== */
-type ColabMultiSelectProps = {
-  atividade: Atividade;
-  colabs: Colab[];
-  onChange: (alocados: number[]) => void;
-  setorAlocarLabel?: string;
-};
-
-const ColabMultiSelect: React.FC<ColabMultiSelectProps> = ({
-  atividade,
-  colabs,
-  onChange,
-  setorAlocarLabel,
-}) => {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-
-  const filtrados = useMemo(() => {
-    const k = search.trim().toLowerCase();
-    if (!k) return colabs;
-    return colabs.filter((c) => `${c.id} ${c.nome}`.toLowerCase().includes(k));
-  }, [colabs, search]);
-
-  const selecionados = useMemo(
-    () =>
-      atividade.alocados
-        .map((id) => colabs.find((c) => c.id === id))
-        .filter(Boolean) as Colab[],
-    [atividade.alocados, colabs]
-  );
-
-  const toggleColab = (id: number) => {
-    const jaTem = atividade.alocados.includes(id);
-    if (jaTem) onChange(atividade.alocados.filter((x) => x !== id));
-    else onChange([...atividade.alocados, id]);
-  };
-
-  const nSel = atividade.alocados.length;
-  let label = "Sem alocação";
-  if (nSel === 1 && selecionados[0]) label = `${selecionados[0].id} - ${selecionados[0].nome}`;
-  else if (nSel > 1) label = `${nSel} colaboradores selecionados`;
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "flex w-full items-center justify-between rounded-md border bg-background px-1.5 py-1 text-2xs",
-            !nSel && "text-muted-foreground"
-          )}
-        >
-          <span className="truncate">{label}</span>
-          <ChevronsUpDown className="ml-1 h-3 w-3 opacity-60" />
-        </button>
-      </PopoverTrigger>
-
-      <PopoverContent className="w-80 p-2">
-        {setorAlocarLabel ? (
-          <div className="mb-2 text-2xs text-muted-foreground">
-            Filtrado por:{" "}
-            <span className="font-medium text-foreground">{setorAlocarLabel}</span>
-          </div>
-        ) : null}
-
-        <div className="mb-2">
-          <Input
-            placeholder="Buscar colaborador..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-7 text-xs"
-          />
-        </div>
-
-        <div className="max-h-44 overflow-y-auto space-y-1">
-          {filtrados.map((c) => {
-            const selected = atividade.alocados.includes(c.id);
-            return (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => toggleColab(c.id)}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1 text-xs text-left",
-                  selected ? "bg-primary/10" : "hover:bg-muted"
-                )}
-              >
-                <span
-                  className={cn(
-                    "flex h-4 w-4 items-center justify-center rounded border text-2xs",
-                    selected ? "bg-primary text-primary-foreground" : "bg-background"
-                  )}
-                >
-                  {selected && <Check className="h-3 w-3" />}
-                </span>
-                <span className="truncate">
-                  {c.id} - {c.nome}
-                </span>
-              </button>
-            );
-          })}
-
-          {!filtrados.length && (
-            <div className="px-2 py-1 text-2xs text-muted-foreground">
-              Nenhum colaborador encontrado (verifique o filtro de setor).
-            </div>
-          )}
-        </div>
-
-        {selecionados.length > 0 && (
-          <div className="mt-2 border-t pt-2">
-            <div className="mb-1 text-2xs font-medium">Selecionados ({selecionados.length})</div>
-            <div className="flex flex-wrap gap-1">
-              {selecionados.map((c) => (
-                <span
-                  key={c.id}
-                  className="flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-[2px] text-2xs"
-                >
-                  {c.id} - {c.nome}
-                  <button
-                    type="button"
-                    onClick={() => onChange(atividade.alocados.filter((x) => x !== c.id))}
-                    className="inline-flex items-center justify-center rounded-full hover:bg-primary/20"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-
-            <div className="mt-2 flex justify-end">
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 px-2 text-2xs"
-                onClick={() => onChange([])}
-              >
-                Limpar todos
-              </Button>
-            </div>
-          </div>
-        )}
-      </PopoverContent>
-    </Popover>
-  );
-};
-
-/* =================== Página =================== */
 export default function AlocacaoPage() {
   const { opId } = useParams();
   const [sp] = useSearchParams();
-  const { user } = useAuth();
+  const codproj = sp.get("codproj");
+  const { toast, success, error: toastErro } = useToast();
 
-  const [loading, setLoading] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const hoje = useMemo(() => isoLocal(new Date()), []);
+  const [ini, setIni] = useState(sp.get("ini") || hoje);
+  const [fin, setFin] = useState(sp.get("fin") || somarDias(hoje, 5));
+  const periodo = ini <= fin ? { ini, fin } : { ini: fin, fin: ini };
+  const [diaGantt, setDiaGantt] = useState(sp.get("plan") || hoje);
+  const [cfg, setCfg] = useState(lerCapacidade);
 
-  // período datas (para ANALISAR DEMANDAS)
-  const today = new Date();
-  const defIni =
-    sp.get("ini") ||
-    `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
-      today.getDate()
-    ).padStart(2, "0")}`;
-  const defFin =
-    sp.get("fin") ||
-    (() => {
-      const t = new Date(today);
-      t.setDate(t.getDate() + 5);
-      return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(
-        t.getDate()
-      ).padStart(2, "0")}`;
-    })();
-
-  const [ini, setIni] = useState(defIni);
-  const [fin, setFin] = useState(defFin);
-
-  // ✅ NOVO: dia que você está “montando” o planejamento (controla Gantt + ajuda no preenchimento)
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [diaPlanejamento, setDiaPlanejamento] = useState<string>(sp.get("plan") || todayStr);
-
+  const [demandas, setDemandas] = useState<Demanda[]>([]);
   const [colabs, setColabs] = useState<Colab[]>([]);
-  const [atividades, setAtividades] = useState<Atividade[]>([]);
+  const [externa, setExterna] = useState<CargaExterna>(new Map());
+  const [loading, setLoading] = useState(true);
+  const [loadingExterna, setLoadingExterna] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [erroExterna, setErroExterna] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  /** Alterações a devolver à tela depois de recarregar (as que não gravaram). */
+  const reaplicar = useRef<Map<string, { alocados: number[]; dtPlan: string }>>(new Map());
 
-  const [q, setQ] = useState("");
-  const [setorSelecionado, setSetorSelecionado] = useState<string>("Todos");
+  const [setorSel, setSetorSel] = useState("todos");
+  const [busca, setBusca] = useState("");
+  const [status, setStatus] = useState<StatusFiltro>("todas");
+  const [ordem, setOrdem] = useState<OrdemDemandas>({ col: "demanda", dir: "asc" });
+  const [selecionadas, setSelecionadas] = useState<Set<string>>(new Set());
 
-
-  const preNome = sp.get("colabNome");
-
-  const [habOpen, setHabOpen] = useState(false);
-  const [habColab, setHabColab] = useState<Colab | null>(null);
-
-  // estado para troca de funcionário por atividade ERP (seq -> novo codfunc)
-  const [novoDestinoPorSeq, setNovoDestinoPorSeq] = useState<Record<number, number | "">>({});
-  const [loadingSeq, setLoadingSeq] = useState<number | null>(null);
-
-  // para forçar reload após salvar/mudar coisa no ERP
-  const [reloadToken, setReloadToken] = useState(0);
-
-  // ✅ Backlog (modal)
   const [backlogOpen, setBacklogOpen] = useState(false);
+  const [capOpen, setCapOpen] = useState(false);
+  const [colabDetalheId, setColabDetalheId] = useState<number | null>(null);
+  const [sugestao, setSugestao] = useState<Sugestao | null>(null);
+  const [salvando, setSalvando] = useState<{ feitos: number; total: number } | null>(null);
+  const [falhas, setFalhas] = useState<ResultadoGravacao | null>(null);
 
-  /* ========= Carregar dados do ERP ========= */
+  /* ── Carga da OP ─────────────────────────────────────────── */
   useEffect(() => {
     let cancel = false;
-
     (async () => {
+      const idiproc = Number(opId);
+      if (!opId || !Number.isFinite(idiproc)) {
+        setErro(`OP inválida: ${opId ?? "(não informada)"}`);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      setErro(null);
       try {
-        setLoading(true);
-        setErro(null);
-
-        if (!opId) {
-          setErro("OP não informada na rota.");
-          return;
-        }
-
-        const idiproc = Number(opId);
-        if (!Number.isFinite(idiproc)) {
-          setErro(`ID de OP inválido: ${opId}`);
-          return;
-        }
-
-        const CODUSU_SUP = (user as any)?.codusu ?? 134;
-
-        // 1) Atividades da OP (sem aplicação)
-        const sqlAtv = `
-          SELECT
-            DET.CODUSU AS CODSETOR,
-            USU.NOMEUSU AS SETOR,
-            COM.CODPROD AS CODIGO,
-            PRO.DESCRPROD,
-            COM.QTD AS TEMPO_MIN,
-            TO_CHAR(DET.DTINICIOPREV, 'YYYY-MM-DD') AS DT,
-            DET.SEQ AS SEQCRONO
-          FROM AD_CRONOGRAMA CRO
-          JOIN TPRIPROC PROC ON PROC.AD_CODPROJ = CRO.CODPROJ
-          JOIN AD_DETALCRONOGRAMA DET ON DET.SEQ = CRO.SEQ
-          JOIN TCSPRJ PRJ ON PRJ.CODPROJ = CRO.CODPROJ
-          JOIN TSIUSU USU ON USU.CODUSU = DET.CODUSU
-          JOIN AD_COMPONENTECRONO COM ON COM.SEQ = DET.SEQ AND COM.CODUSU = DET.CODUSU
-          JOIN TGFPRO PRO ON PRO.CODPROD = COM.CODPRODSP
-          WHERE PROC.IDIPROC = ${idiproc}
-                AND NVL(COM.FEITO,'N') = 'N'
-                AND  not COM.CODPROD IN (SELECT CODPROD
-                  FROM AD_DETALCRONOGRAMAFUNC
-                  WHERE SEQ = DET.SEQ )
-          ORDER BY DET.CODUSU, COM.CODPROD
-        `.trim();
-
-        const rowsAtv = await obterReg(sqlAtv);
-
-        const mappedAtv: Atividade[] = rowsAtv.map((r: any, idx: number) => {
-          const setorNome = String(r.SETOR ?? "");
-          const nm = setorNome.toUpperCase();
-          let etapa: Etapa = "MON";
-          if (nm.includes("LAM")) etapa = "LAM";
-          else if (nm.includes("PINT")) etapa = "PINT";
-          else if (nm.includes("ELE")) etapa = "ELE";
-          else if (nm.includes("ACAB")) etapa = "ACB";
-
-          const tempoMin = Number(r.TEMPO_MIN ?? 0);
-          const hhPrev = Math.round((tempoMin / 60) * 10) / 10;
-
-          // ✅ Demanda = DTINICIOPREV; Planejamento inicia igual à demanda (você pode mudar na tela)
-          const dtDemanda = String(r.DT || ini);
-          const dtPlan = String(r.DT || ini);
-
-          const codprod = Number(r.CODIGO ?? 0);
-          const seq = Number(r.SEQCRONO ?? 0);
-          const codusu = Number(r.CODSETOR ?? 0);
-
-          return {
-            id: idx + 1,
-            nome: `${r.CODIGO ?? ""} - ${r.DESCRPROD ?? ""}`,
-            etapa,
-            hhPrev,
-            dtDemanda,
-            dtPlan,
-            codprod,
-            seq,
-            tempoMin,
-            codusu,
-            setor: setorNome,
-            alocados: [],
-          };
-        });
-
-        // 2) Colaboradores
-        const sqlColabs = `
-           SELECT DISTINCT
-            FUN.CODFUNC,
-            FUN.NOMEFUNC,
-            CAR.DESCRCARGO,
-            SE.CODUSU AS AD_CODUSU
-          FROM TFPFUN FUN
-          LEFT JOIN AD_DETALCRONOGRAMAFUNC F ON FUN.CODFUNC = F.CODFUNC
-          JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
-          JOIN AD_SETORESCARGO SE ON SE.CODCARGO = CAR.CODCARGO
-          WHERE FUN.USUVPJSUP =  ${CODUSU_SUP}
-          ORDER BY FUN.NOMEFUNC
-        `.trim();
-
-        const rowsColabs = await obterReg(sqlColabs);
-
-        // 3) Planejamento ERP existente para a OP
-        const sqlPlan = `
-          SELECT 
-            FUN.CODFUNC,
-            F.SEQ,
-            F.CODUSU , 
-            TO_CHAR(F.DTPLANEJAMENTO, 'YYYY-MM-DD') AS DT,
-            F.CODPROD,
-            PRO.DESCRPROD,
-            F.QTD,
-            F.SEQUENCIA
-          FROM TFPFUN FUN
-          LEFT JOIN AD_DETALCRONOGRAMAFUNC F ON FUN.CODFUNC = F.CODFUNC
-          LEFT JOIN TGFPRO PRO ON PRO.CODPROD = F.CODPROD
-          LEFT JOIN AD_CRONOGRAMA CRO ON CRO.SEQ = F.SEQ
-          LEFT JOIN TPRIPROC PROC ON PROC.AD_CODPROJ = CRO.CODPROJ
-          WHERE FUN.USUVPJSUP = ${CODUSU_SUP}
-            AND PROC.IDIPROC = ${idiproc}
-            AND F.CODPROD IS NOT NULL
-        `.trim();
-
-        const rowsPlan = await obterReg(sqlPlan);
-
-        const planejadasPorFunc: Record<number, AtividadeERP[]> = {};
-        rowsPlan.forEach((r: any) => {
-          const cod = Number(r.CODFUNC);
-          if (!Number.isFinite(cod)) return;
-          if (!planejadasPorFunc[cod]) planejadasPorFunc[cod] = [];
-          planejadasPorFunc[cod].push({
-            seq: Number(r.SEQ ?? 0),
-            dt: String(r.DT || ""),
-            codprod: Number(r.CODPROD ?? 0),
-            descrprod: String(r.DESCRPROD ?? ""),
-            qtd: Number(r.QTD ?? 0),
-            codusu: Number(r.CODUSU ?? 0),
-            sequencia: Number(r.SEQUENCIA ?? 0),
-          });
-        });
-
-        const mappedColabs: Colab[] = rowsColabs.map((r: any) => {
-          const codfunc = Number(r.CODFUNC);
-          return {
-            id: codfunc,
-            nome: String(r.NOMEFUNC ?? ""),
-            cargo: String(r.DESCRCARGO ?? "Colaborador"),
-            codSetor: Number(r.AD_CODUSU ?? 0),
-            senior: "Pleno",
-            atividadesERP: planejadasPorFunc[codfunc] || [],
-          };
-        });
-
+        const dem = await getDemandas(idiproc);
+        const cols = await getColaboradores([...new Set(dem.map((d) => d.codusu).filter(Boolean))], idiproc);
         if (cancel) return;
-        setAtividades(mappedAtv);
-        setColabs(mappedColabs);
-      } catch (e: any) {
-        console.error("[AlocacaoPage] Erro ao buscar dados ERP:", e);
-        if (!cancel) setErro(e?.message || "Falha ao carregar dados da OP.");
+        const volta = reaplicar.current;
+        reaplicar.current = new Map();
+        setDemandas(volta.size ? dem.map((d) => (volta.has(d.chave) ? { ...d, ...volta.get(d.chave)! } : d)) : dem);
+        setColabs(cols);
+      } catch (e: unknown) {
+        if (!cancel) setErro(mensagemErro(e, "Falha ao carregar os dados da OP."));
       } finally {
         if (!cancel) setLoading(false);
       }
     })();
-
     return () => {
       cancel = true;
     };
-  }, [opId, ini, user, reloadToken]);
+  }, [opId, reload]);
 
-  /* ========= Derivados / filtros ========= */
-  const colabById = useMemo(() => {
-    const m: Record<number, Colab> = {};
-    colabs.forEach((c) => (m[c.id] = c));
-    return m;
-  }, [colabs]);
-
-  const setoresDisponiveis = useMemo(() => {
-    const map = new Map<number, string>();
-    atividades.forEach((a) => {
-      if (a.codusu) {
-        if (!map.has(a.codusu)) map.set(a.codusu, a.setor || String(a.codusu));
-      }
-    });
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
-  }, [atividades]);
-
-const setorSelecionadoLabel = useMemo(() => {
-  if (setorSelecionado === "Todos") return "";
-  const cod = Number(setorSelecionado);
-  const found = setoresDisponiveis.find(([c]) => c === cod);
-  if (!found) return String(setorSelecionado);
-  return `${found[0]} - ${found[1]}`;
-}, [setorSelecionado, setoresDisponiveis]);
-
-
-const colabsVisiveis = useMemo(() => {
-  if (setorSelecionado === "Todos") return colabs;
-  return colabs.filter((c) => String(c.codSetor) === String(setorSelecionado));
-}, [colabs, setorSelecionado]);
-
-const colabsParaAlocar = colabsVisiveis;
-
-
-
-  // ✅ Filtra por período de DEMANDA (para você “analisar as demandas”)
-  const atividadesFiltradas = useMemo(
-    () =>
-      atividades.filter((a) => {
-        if (a.dtDemanda < ini || a.dtDemanda > fin) return false;
-
-       if (setorSelecionado !== "Todos" && String(a.codusu) !== String(setorSelecionado)) return false;
-
-
-        if (q.trim()) {
-          const k = q.trim().toLowerCase();
-          if (!`${a.nome} ${a.setor} ${a.codusu}`.toLowerCase().includes(k)) return false;
+  /* Outras OPs: do menor entre início e hoje até 14 dias depois do fim — cobre
+     a distribuição e o Gantt nos dias vizinhos sem refazer a consulta a cada clique. */
+  const faixaExterna = useMemo(
+    () => ({ ini: periodo.ini < hoje ? periodo.ini : hoje, fin: somarDias(periodo.fin, 14) }),
+    [periodo.ini, periodo.fin, hoje]
+  );
+  const idsColabs = useMemo(() => colabs.map((c) => c.id).join(","), [colabs]);
+  useEffect(() => {
+    if (!idsColabs) {
+      setExterna(new Map());
+      return;
+    }
+    let cancel = false;
+    setLoadingExterna(true);
+    setErroExterna(null);
+    // Espera o PCP terminar de digitar a data antes de consultar.
+    const t = window.setTimeout(async () => {
+      try {
+        const m = await getCargaExterna(idsColabs.split(",").map(Number), Number(opId), faixaExterna.ini, faixaExterna.fin);
+        if (!cancel) setExterna(m);
+      } catch (e: unknown) {
+        if (!cancel) {
+          setExterna(new Map());
+          setErroExterna(mensagemErro(e, "Falha ao carregar a carga de outras OPs."));
         }
-        return true;
-      }),
-    [atividades, ini, fin, setorSelecionado, q]
+      } finally {
+        if (!cancel) setLoadingExterna(false);
+      }
+    }, 400);
+    return () => {
+      cancel = true;
+      window.clearTimeout(t);
+    };
+  }, [idsColabs, opId, faixaExterna.ini, faixaExterna.fin, reload]);
+
+  /* ── Alterações não salvas ───────────────────────────────── */
+  const qtdPendentes = useMemo(() => demandas.filter(pendente).length, [demandas]);
+  const temAlteracao = useMemo(() => demandas.some((d) => pendente(d) || soDataAlterada(d)), [demandas]);
+  useEffect(() => {
+    if (!temAlteracao) return;
+    const aviso = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", aviso);
+    return () => window.removeEventListener("beforeunload", aviso);
+  }, [temAlteracao]);
+
+  /* ── Derivados ───────────────────────────────────────────── */
+  const setores = useMemo(() => {
+    const m = new Map<number, string>();
+    demandas.forEach((d) => d.codusu && !m.has(d.codusu) && m.set(d.codusu, d.setor || String(d.codusu)));
+    return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
+  }, [demandas]);
+  const setorNum = setorSel === "todos" ? null : Number(setorSel);
+  const setoresVisiveis = setorNum == null ? setores : setores.filter(([c]) => c === setorNum);
+
+  const colabsVisiveis = useMemo(
+    () => (setorNum == null ? colabs : colabs.filter((c) => c.codSetores.includes(setorNum))),
+    [colabs, setorNum]
+  );
+  const colabDetalhe = colabs.find((c) => c.id === colabDetalheId) ?? null;
+
+  const ix = useMemo(() => indexarCarga(demandas, colabs, externa), [demandas, colabs, externa]);
+  const dias = useMemo(() => diasDoPeriodo(periodo.ini, periodo.fin, cfg), [periodo.ini, periodo.fin, cfg]);
+  const quadroTruncado = dias.length >= MAX_DIAS_QUADRO && dias[dias.length - 1] < periodo.fin;
+
+  /** Folga no dia; se `excluir` já conta nesse dia para o colaborador, devolve a parte dele. */
+  const livreDe = useCallback(
+    (cod: number, dia: string, excluir?: Demanda) => {
+      let livre = celula(ix, cod, dia, cfg).livre;
+      if (excluir && excluir.dtPlan === dia && excluir.alocados.includes(cod)) livre += horasPorAlocado(excluir);
+      return livre;
+    },
+    [ix, cfg]
   );
 
-  // ✅ Backlog = demandas atrasadas (dtDemanda < hoje) e ainda “não feitas”
-  const backlogAtividades = useMemo(() => {
-    return atividades
-      .filter((a) => a.dtDemanda && a.dtDemanda < todayStr) // atrasadas
-      .sort((a, b) => a.dtDemanda.localeCompare(b.dtDemanda));
-  }, [atividades, todayStr]);
+  const noPeriodo = useCallback((d: Demanda) => d.dtDemanda >= periodo.ini && d.dtDemanda <= periodo.fin, [periodo.ini, periodo.fin]);
+  const doSetor = useCallback((d: Demanda) => setorNum == null || d.codusu === setorNum, [setorNum]);
 
-  const totalHH = atividades.reduce((s, a) => s + a.hhPrev, 0);
-  const totalHHAloc = atividades.reduce((s, a) => s + (a.alocados.length ? a.hhPrev : 0), 0);
-
-  // Resumo geral (no período, independente do dia do Gantt)
-  const resumoColabTela = (id: number) => {
-    let qtd = 0;
-    let hh = 0;
-    atividades.forEach((a) => {
-      if (a.alocados.includes(id)) {
-        qtd += 1;
-        const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-        hh += share;
-      }
-    });
-    return { qtd, hh };
-  };
-
-  // ✅ Resumo por DIA DE PLANEJAMENTO (usado no Gantt)
-  const resumoColabTelaDia = (id: number, dia: string) => {
-    let qtd = 0;
-    let hh = 0;
-    atividades.forEach((a) => {
-      if (a.dtPlan !== dia) return;
-      if (a.alocados.includes(id)) {
-        qtd += 1;
-        const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-        hh += share;
-      }
-    });
-    return { qtd, hh };
-  };
-
-  /* =========== Distribuição auto simples (mock) =========== */
-  const distribuirAuto = () => {
-    if (!colabsVisiveis.length) return;
-
-    const semDono = atividades
-      .filter((a) => !a.alocados.length && a.dtDemanda >= ini && a.dtDemanda <= fin)
-      .sort((a, b) =>
-        a.dtDemanda === b.dtDemanda ? b.hhPrev - a.hhPrev : a.dtDemanda.localeCompare(b.dtDemanda)
-      );
-    if (!semDono.length) return;
-
-    const updates: Record<number, number> = {};
-    let idxColab = 0;
-
-    for (const a of semDono) {
-      const c = colabsVisiveis[idxColab];
-      updates[a.id] = c.id;
-      idxColab = (idxColab + 1) % colabsVisiveis.length;
-    }
-
-    setAtividades((arr) =>
-      arr.map((x) => (updates[x.id] ? { ...x, alocados: [updates[x.id]] } : x))
+  const visiveis = useMemo(() => {
+    const k = busca.trim().toLowerCase();
+    // Atrasadas e não salvas ignoram o período: a atrasada é, por definição,
+    // anterior a hoje (e o período começa em hoje), e a pendência pode ter
+    // vindo do backlog.
+    const ignoraPeriodo = status === "atrasadas" || status === "pendentes";
+    return ordenarDemandas(
+      demandas.filter(
+        (d) =>
+          doSetor(d) &&
+          (ignoraPeriodo || noPeriodo(d)) &&
+          passaStatus(d, status, hoje) &&
+          (!k || `${d.nome} ${d.setor} ${d.codusu}`.toLowerCase().includes(k))
+      ),
+      ordem
     );
-  };
+  }, [demandas, doSetor, noPeriodo, status, hoje, busca, ordem]);
 
-  // ✅ Atalho: aplicar o “diaPlanejamento” como dtPlan em lote
-  const aplicarDiaPlanejamentoEmLote = () => {
-    setAtividades((arr) =>
-      arr.map((a) => {
-        // aplica apenas nas atividades visíveis (filtros) e que ainda não foram mexidas (opcional)
-        if (a.dtDemanda < ini || a.dtDemanda > fin) return a;
-        return { ...a, dtPlan: diaPlanejamento };
-      })
-    );
-  };
-
-  /* ===== Exportar planejamento por funcionário (CSV) ===== */
-  const exportPlanejamentoCsv = () => {
-    const registrosTela = atividades.flatMap((a) => {
-      if (!a.alocados.length) return [];
-      const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-      return a.alocados.map((codfunc) => {
-        const col = colabById[codfunc];
-        return {
-          codfunc,
-          nome: col?.nome ?? "",
-          op: opId ?? "",
-          data: toBR(a.dtPlan), // ✅ agora exporta a data do planejamento
-          atividade: a.nome,
-          hh: share.toFixed(1).replace(".", ","),
-          origem: "Tela" as const,
-        };
-      });
-    });
-
-    const registrosErp: {
-      codfunc: number;
-      nome: string;
-      op: string;
-      data: string;
-      atividade: string;
-      hh: string;
-      origem: "ERP";
-    }[] = [];
-
-    colabsVisiveis.forEach((c) => {
-      (c.atividadesERP || []).forEach((p) => {
-        const hh = (p.qtd || 0) / 60;
-        registrosErp.push({
-          codfunc: c.id,
-          nome: c.nome,
-          op: opId ?? "",
-          data: toBR(p.dt),
-          atividade: `${p.codprod} - ${p.descrprod}`,
-          hh: hh.toFixed(1).replace(".", ","),
-          origem: "ERP",
-        });
-      });
-    });
-
-    const registros = [...registrosTela, ...registrosErp];
-
-    if (!registros.length) {
-      alert("Nenhuma atividade (tela ou ERP) para exportar.");
-      return;
+  const resumo: Resumo = useMemo(() => {
+    const base = demandas.filter((d) => doSetor(d) && noPeriodo(d));
+    const atrasadas = demandas.filter((d) => doSetor(d) && atrasoDias(d, hoje) > 0);
+    let capacidade = 0;
+    let carga = 0;
+    for (const c of colabsVisiveis) {
+      for (const d of dias) {
+        const x = celula(ix, c.id, d, cfg);
+        capacidade += x.capacidade;
+        carga += x.total;
+      }
     }
-
-    const header = ["codfunc", "nome", "op", "data", "atividade", "hh", "origem"];
-    const rows = registros.map((r) => [r.codfunc, r.nome, r.op, r.data, r.atividade, r.hh, r.origem]);
-
-    const csv =
-      [header, ...rows]
-        .map((r) =>
-          r
-            .map((v) => {
-              const s = String(v ?? "");
-              if (s.includes(";") || s.includes('"') || s.includes("\n"))
-                return `"${s.replace(/"/g, '""')}"`;
-              return s;
-            })
-            .join(";")
-        )
-        .join("\n");
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `planejamento_OP_${opId}_${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  /* ===== Exportar PDF (✅ 1 página por colaborador) ===== */
-  const exportPlanejamentoPdf = () => {
-    const lista = colabsVisiveis.length ? colabsVisiveis : colabs;
-
-    if (!lista.length) {
-      alert("Nenhum colaborador para exportar.");
-      return;
-    }
-
-    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    const pageWidth = doc.internal.pageSize.getWidth();
-
-    const drawHeader = () => {
-      // Logo
-      try {
-        if (LOGO_BASE64 && LOGO_BASE64 !== "data:image/png;base64,SEU_LOGO_AQUI") {
-          doc.addImage(LOGO_BASE64, "PNG", 10, 8, 30, 10);
-        }
-      } catch {}
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(13);
-      doc.text("Planejamento de Atividades por Colaborador", pageWidth / 2, 15, {
-        align: "center",
-      });
-
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "normal");
-      const hojeStr = toBR(new Date().toISOString().slice(0, 10));
-      doc.text(`OP: ${opId ?? ""}`, pageWidth / 2, 21, { align: "center" });
-      doc.text(
-        `Demandas: ${toBR(ini)} a ${toBR(fin)}  •  Gerado em: ${hojeStr}`,
-        pageWidth / 2,
-        26,
-        { align: "center" }
-      );
-
-      // linha separadora
-      doc.setDrawColor(220);
-      doc.line(12, 30, pageWidth - 12, 30);
+    return {
+      demandas: base.length,
+      horas: base.reduce((s, d) => s + d.hhPrev, 0),
+      alocadas: base.filter((d) => d.alocados.length).length,
+      horasAlocadas: base.filter((d) => d.alocados.length).reduce((s, d) => s + d.hhPrev, 0),
+      atrasadas: atrasadas.length,
+      horasAtrasadas: atrasadas.reduce((s, d) => s + d.hhPrev, 0),
+      pessoas: colabsVisiveis.length,
+      dias: dias.length,
+      capacidade,
+      carga,
     };
+  }, [demandas, doSetor, noPeriodo, hoje, colabsVisiveis, dias, ix, cfg]);
 
-    lista.forEach((colab, idx) => {
-      // ✅ uma página por colaborador
-      if (idx > 0) doc.addPage();
-      drawHeader();
-
-      let cursorY = 38;
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(12);
-      doc.text(`${colab.nome}`, 14, cursorY);
-
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.text(`Cargo: ${colab.cargo}  •  Setor: ${colab.codSetor || "-"}`, 14, cursorY + 5);
-
-      // ✅ atividades por DATA DE PLANEJAMENTO (dtPlan)
-      const telaAtvs = atividades
-        .filter((a) => a.alocados.includes(colab.id) && a.dtPlan >= ini && a.dtPlan <= fin)
-        .sort((a, b) => a.dtPlan.localeCompare(b.dtPlan));
-
-      const erpAtvs = (colab.atividadesERP || [])
-        .filter((p) => !p.dt || (p.dt >= ini && p.dt <= fin))
-        .sort((a, b) => a.dt.localeCompare(b.dt));
-
-      const hhTela = telaAtvs.reduce((s, a) => {
-        const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-        return s + share;
-      }, 0);
-
-      const hhErp = erpAtvs.reduce((s, p) => s + p.qtd / 60, 0);
-      const hhTotal = hhTela + hhErp;
-
-      doc.setFontSize(9);
-      doc.text(
-        `HH tela: ${hhTela.toFixed(1)}h   •   HH ERP: ${hhErp.toFixed(1)}h   •   Total: ${hhTotal.toFixed(1)}h`,
-        pageWidth - 14,
-        cursorY,
-        {
-          align: "right",
-        }
-      );
-
-      cursorY += 10;
-
-      type BodyRow = [string, string, string, string, string, string, string, string]; // + Obs
-      const body: BodyRow[] = [];
-
-      telaAtvs.forEach((a) => {
-        const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-        body.push([
-          toBR(a.dtPlan),
-          a.nome,
-          "Tela",
-          a.etapa,
-          `${share.toFixed(1)}h`,
-          opId ?? "",
-          "",
-          "",
-        ]);
-      });
-
-      const etapaErp = etapaFromCargo(colab.cargo);
-      erpAtvs.forEach((p) => {
-        const hh = p.qtd / 60;
-        body.push([
-          toBR(p.dt),
-          `${p.codprod} - ${p.descrprod}`,
-          "ERP",
-          etapaErp,
-          `${hh.toFixed(1)}h`,
-          opId ?? "",
-          "",
-          "",
-        ]);
-      });
-
-      if (!body.length) {
-        body.push(["", "Sem atividades no período", "", "", "", opId ?? "", "", ""]);
+  /** Colaborador × dia acima da capacidade por causa do que está na tela. */
+  const sobrecargas = useMemo(() => {
+    const out: { nome: string; dia: string; total: number; cap: number }[] = [];
+    const nome = new Map(colabs.map((c) => [c.id, c.nome]));
+    for (const [cod, porDia] of ix) {
+      for (const [dia, p] of porDia) {
+        if (p.tela <= 0) continue;
+        const cap = capacidadeDoDia(cfg, dia);
+        const total = p.tela + p.erp + p.externa;
+        if (total > cap + 0.01) out.push({ nome: nome.get(cod) ?? `#${cod}`, dia, total, cap });
       }
+    }
+    return out.sort((a, b) => a.dia.localeCompare(b.dia) || b.total - b.cap - (a.total - a.cap));
+  }, [ix, colabs, cfg]);
 
-      autoTable(doc, {
-        startY: cursorY,
-        head: [["Data", "Atividade", "Origem", "Etapa", "HH", "OP", "OK", "Obs"]],
-        body,
-        styles: { fontSize: 8, cellPadding: 1.4, textColor: 20 },
-        headStyles: { fillColor: [25, 40, 66], textColor: 255 },
-        alternateRowStyles: { fillColor: [245, 245, 245] },
-        margin: { left: 12, right: 12 },
-        columnStyles: {
-          0: { cellWidth: 18 },
-          1: { cellWidth: 78 },
-          2: { cellWidth: 14 },
-          3: { cellWidth: 14 },
-          4: { cellWidth: 12, halign: "right" },
-          5: { cellWidth: 12 },
-          6: { cellWidth: 10, halign: "center" },
-          7: { cellWidth: 30 }, // Obs
-        },
-        didDrawCell: (data: any) => {
-          // desenha quadradinho na coluna OK
-          if (data.section === "body" && data.column.index === 6) {
-            const { x, y, height } = data.cell;
-            const size = Math.min(4, height - 2);
-            const offsetY = y + (height - size) / 2;
-            doc.setDrawColor(30);
-            doc.rect(x + 3, offsetY, size, size);
-          }
-        },
-      });
+  /* ── Edição ──────────────────────────────────────────────── */
+  const alterar = (chaves: Iterable<string>, patch: (d: Demanda) => Partial<Demanda>) => {
+    const alvo = new Set(chaves);
+    setDemandas((arr) => arr.map((d) => (alvo.has(d.chave) ? { ...d, ...patch(d) } : d)));
+  };
 
-      const finalY = (doc as any).lastAutoTable?.finalY ?? cursorY + 40;
-      const signY = Math.min(finalY + 14, 280);
-
-      doc.setFontSize(10);
-      doc.text("Assinatura do colaborador:", 14, signY);
-      doc.line(60, signY, pageWidth - 14, signY);
-
-      doc.setFontSize(9);
-      doc.text("Observações do dia:", 14, signY + 10);
-      doc.rect(14, signY + 12, pageWidth - 28, 22); // caixa grande para escrever
+  const selecionar = (chaves: string[], marcar: boolean) =>
+    setSelecionadas((prev) => {
+      const next = new Set(prev);
+      chaves.forEach((c) => (marcar ? next.add(c) : next.delete(c)));
+      return next;
     });
 
-    doc.save(`planejamento_OP_${opId}_${new Date().toISOString().slice(0, 10)}.pdf`);
+  const selecionadasDem = useMemo(() => demandas.filter((d) => selecionadas.has(d.chave)), [demandas, selecionadas]);
+  const setorComumSel = useMemo(() => {
+    const s = new Set(selecionadasDem.map((d) => d.codusu));
+    return s.size === 1 ? [...s][0] : undefined;
+  }, [selecionadasDem]);
+
+  const abrirDistribuicao = (alvo: Demanda[]) => {
+    setSugestao(sugerirDistribuicao(alvo, colabs, ix, cfg, hoje, periodo.fin));
   };
 
-  /* ===== Botão Salvar planejamento (ERP) ===== */
-  const salvarPlanejamento = async () => {
-    const registros = atividades.filter((a) => a.alocados.length && a.codprod && a.seq);
+  const aplicarDistribuicao = () => {
+    if (!sugestao) return;
+    const porChave = new Map(sugestao.propostas.map((p) => [p.chave, p]));
+    alterar(porChave.keys(), (d) => ({ alocados: porChave.get(d.chave)!.alocados, dtPlan: porChave.get(d.chave)!.dtPlan }));
+    success(`${sugestao.propostas.length} demandas distribuídas`, "Revise no quadro e salve para gravar no ERP.");
+    setSugestao(null);
+  };
 
-    if (!registros.length) {
-      alert("Nenhuma atividade alocada para salvar.");
-      return;
-    }
-    if (!opId) {
-      alert("OP não informada.");
-      return;
-    }
-
+  /* ── Gravação ────────────────────────────────────────────── */
+  const salvar = async () => {
+    const itens = demandas.filter(pendente);
+    if (!itens.length) return;
+    setSalvando({ feitos: 0, total: itens.reduce((s, d) => s + d.alocados.length, 0) });
     try {
-      setSaving(true);
+      const r = await salvarAlocacoes(itens, (feitos, total) => setSalvando({ feitos, total }));
+      const falhou = new Set(r.falhas.map((f) => f.chave));
+      const volta = new Map<string, { alocados: number[]; dtPlan: string }>();
+      itens.filter((d) => falhou.has(d.chave)).forEach((d) => volta.set(d.chave, { alocados: d.alocados, dtPlan: d.dtPlan }));
+      demandas.filter(soDataAlterada).forEach((d) => volta.set(d.chave, { alocados: [], dtPlan: d.dtPlan }));
+      reaplicar.current = volta;
 
-      for (const a of registros) {
-        const qtdColabs = a.alocados.length || 1;
-        const minutosPorColab = Math.round((a.hhPrev * 60) / qtdColabs);
-
-        // ✅ DTPLANEJAMENTO agora vem do dtPlan (se vazio, cai no diaPlanejamento)
-        const dtSalvar = a.dtPlan || diaPlanejamento;
-
-        for (const codfunc of a.alocados) {
-          await api.post("/api/sankhya/dataset/save", {
-            entity: "AD_DETALCRONOGRAMAFUNC",
-            fields: ["SEQ", "CODFUNC", "CODUSU", "CODPROD", "DTPLANEJAMENTO", "QTD"],
-            values: {
-              "0": String(a.seq),
-              "1": String(codfunc),
-              "2": String(a.codusu),
-              "3": String(a.codprod),
-              "4": toSankhyaDate(dtSalvar),
-              "5": minutosPorColab,
-            },
-          });
-        }
-      }
-
-      alert("Planejamento salvo com sucesso no ERP.");
-      setReloadToken((x) => x + 1);
-    } catch (e: any) {
-      console.error("[salvarPlanejamento] Falha:", e);
-      alert(`Erro ao salvar o planejamento.\n${e?.message || "Veja o console."}`);
+      if (r.falhas.length) setFalhas(r);
+      else success(`${r.gravados} ${r.gravados === 1 ? "registro gravado" : "registros gravados"} no ERP`);
+      setSelecionadas(new Set());
+      setReload((x) => x + 1);
+    } catch (e: unknown) {
+      toastErro("Falha ao salvar", mensagemErro(e));
     } finally {
-      setSaving(false);
+      setSalvando(null);
     }
   };
 
-  /* ===== handlers modal habilidades / troca ERP ===== */
-  const openHab = (c: Colab) => {
-    setHabColab(c);
-    setNovoDestinoPorSeq({});
-    setHabOpen(true);
-  };
-  const closeHab = () => {
-    setHabOpen(false);
-    setHabColab(null);
-    setNovoDestinoPorSeq({});
-    setLoadingSeq(null);
+  /** Recarrega do ERP sem perder o que está na tela e ainda não foi gravado. */
+  const recarregarMantendoAlteracoes = () => {
+    const volta = new Map<string, { alocados: number[]; dtPlan: string }>();
+    demandas.filter((d) => pendente(d) || soDataAlterada(d)).forEach((d) => volta.set(d.chave, { alocados: d.alocados, dtPlan: d.dtPlan }));
+    reaplicar.current = volta;
+    setReload((x) => x + 1);
   };
 
-  const handleTrocarFuncionarioErpItem = async (item: AtividadeERP) => {
-    if (!habColab || !opId) {
-      alert("Colaborador ou OP inválidos.");
-      return;
-    }
-
-    const novoDestino = novoDestinoPorSeq[item.seq];
-    if (!novoDestino) {
-      alert("Selecione o novo colaborador para essa atividade.");
-      return;
-    }
-
-    if (novoDestino === habColab.id) {
-      alert("O colaborador destino precisa ser diferente do atual.");
-      return;
-    }
-
-    if (
-      !window.confirm(
-        `Confirmar troca desta atividade (SEQ ${item.seq}, PROD ${item.codprod}, ${toBR(
-          item.dt
-        )}) de ${habColab.nome} para o colaborador ${novoDestino}?`
-      )
-    ) {
-      return;
-    }
-
+  const trocar = async (item: ItemErp, de: Colab, para: number) => {
+    const destino = colabs.find((c) => c.id === para);
+    if (!window.confirm(`Trocar "${item.codprod} - ${item.descrprod}" (${toBR(item.dt)}) de ${de.nome} para ${destino?.nome ?? para}?`)) return;
     try {
-      setLoadingSeq(item.seq);
-
-      await api.post("/api/sankhya/dataset/save", {
-        entity: "AD_DETALCRONOGRAMAFUNC",
-        fields: ["SEQ", "CODFUNC", "CODPROD", "DTPLANEJAMENTO", "QTD"],
-        values: {
-          "0": String(item.seq),
-          "1": String(novoDestino),
-          "2": String(item.codprod),
-          "3": toSankhyaDate(item.dt),
-          "4": String(item.qtd),
-        },
-        pk: {
-          SEQ: String(item.seq),
-          CODUSU: String(item.codusu),
-          SEQUENCIA: String(item.sequencia),
-        },
-      });
-
-      alert("Atividade atualizada no ERP com sucesso (CODFUNC alterado).");
-
-      setNovoDestinoPorSeq((prev) => {
-        const copy = { ...prev };
-        delete copy[item.seq];
-        return copy;
-      });
-
-      setReloadToken((x) => x + 1);
-    } catch (e) {
-      console.error("[handleTrocarFuncionarioErpItem] Erro:", e);
-      alert("Erro ao trocar o colaborador dessa atividade no ERP.");
-    } finally {
-      setLoadingSeq(null);
+      await trocarColaboradorErp(item, para);
+      success("Colaborador trocado no ERP");
+      // Antes a troca recarregava a tela e apagava as alocações ainda não salvas.
+      recarregarMantendoAlteracoes();
+    } catch (e: unknown) {
+      toastErro("Não foi possível trocar", mensagemErro(e));
     }
   };
 
-  /* =================== Render =================== */
+  const recarregar = () => {
+    if (temAlteracao && !window.confirm("Recarregar descarta as alterações não salvas. Continuar?")) return;
+    reaplicar.current = new Map();
+    setSelecionadas(new Set());
+    setReload((x) => x + 1);
+  };
+
+  const exportar = (tipo: "csv" | "pdf") => {
+    const dados = { opId: opId ?? "", ini: periodo.ini, fin: periodo.fin, demandas, colabs: colabsVisiveis, externa };
+    const ok = tipo === "csv" ? exportarCsv(dados) : exportarPdf(dados);
+    if (!ok) toast({ title: "Nada para exportar", description: "Nenhum colaborador com atividade no período.", variant: "info" });
+  };
+
+  const horasSel = selecionadasDem.reduce((s, d) => s + d.hhPrev, 0);
+
   return (
-    <div className="space-y-4">
-      {/* Header / filtros */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold">Alocação de Recursos — OP {opId}</h3>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                {preNome && <Badge variant="secondary">Colaborador focado: {preNome}</Badge>}
-                <span>
-                  Atividades: {atividades.length} • HH total: {totalHH.toFixed(1)}h • HH alocado:{" "}
-                  {totalHHAloc.toFixed(1)}h
-                </span>
-                <span>
-                  • Colaboradores (visíveis): {colabsVisiveis.length}
-                 {setorSelecionado !== "Todos" ? ` • Setor: ${setorSelecionadoLabel}` : ""}
-
-                </span>
-                <span className="font-medium">
-                  • Dia do planejamento (Gantt): {toBR(diaPlanejamento)}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              {/* ✅ Backlog */}
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1"
-                onClick={() => setBacklogOpen(true)}
-                disabled={loading || !atividades.length}
-              >
-                <ClipboardList className="h-4 w-4" />
-                Backlog
-              </Button>
-
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1"
-                onClick={exportPlanejamentoCsv}
-                disabled={!atividades.length || !(colabsVisiveis.length || colabs.length)}
-              >
-                <Download className="h-4 w-4" />
-                CSV
-              </Button>
-
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1"
-                onClick={exportPlanejamentoPdf}
-                disabled={!atividades.length || !(colabsVisiveis.length || colabs.length)}
-              >
-                <FileText className="h-4 w-4" />
-                PDF
-              </Button>
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={distribuirAuto}
-                disabled={!atividades.length || !colabsVisiveis.length}
-              >
-                Distribuir (auto)
-              </Button>
-
-              <Button
-                size="sm"
-                className="gap-1"
-                onClick={salvarPlanejamento}
-                disabled={saving || !atividades.length || !colabsVisiveis.length}
-              >
-                <Save className="h-4 w-4" />
-                {saving ? "Salvando..." : "Salvar"}
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-
-        {/* ✅ filtros + NOVO campo de dia de planejamento */}
-        <CardContent className="grid grid-cols-12 gap-3">
-          <div className="col-span-12 md:col-span-2">
-            <label className="text-xs text-muted-foreground">Atividade</label>
-            <Input
-              placeholder="Buscar atividade…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-          </div>
-
-          <div className="col-span-6 md:col-span-2">
-            <label className="text-xs text-muted-foreground">Setor</label>
-            <select
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs"
-              value={setorSelecionado}
-              onChange={(e) => setSetorSelecionado(e.target.value)}
-            >
-              <option value="Todos">Todos os setores</option>
-              {setoresDisponiveis.map(([codusu, nome]) => (
-                <option key={codusu} value={String(codusu)}>
-                  {codusu} - {nome}
-                </option>
+    <div className="space-y-6">
+      <PageHeader
+        title={`Alocação — OP ${opId ?? ""}`}
+        description={`${codproj ? `Projeto ${codproj} · ` : ""}planeje as demandas por colaborador e dia dentro da capacidade`}
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setBacklogOpen(true)} disabled={loading}>
+              <ClipboardList className="h-4 w-4" /> Backlog
+              {resumo.atrasadas > 0 && <Badge variant="destructive" className="ml-1">{resumo.atrasadas}</Badge>}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => exportar("csv")} disabled={loading}>
+              <Download className="h-4 w-4" /> CSV
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => exportar("pdf")} disabled={loading}>
+              <FileText className="h-4 w-4" /> PDF
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setCapOpen(true)} title="Capacidade diária">
+              <Settings2 className="h-4 w-4" /> Capacidade
+            </Button>
+            <Button variant="ghost" size="icon-sm" onClick={recarregar} disabled={loading} aria-label="Recarregar dados da OP">
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+            <Button size="sm" onClick={salvar} disabled={!!salvando || !qtdPendentes}>
+              <Save className="h-4 w-4" />
+              {salvando ? `Salvando ${salvando.feitos}/${salvando.total}` : `Salvar${qtdPendentes ? ` (${qtdPendentes})` : ""}`}
+            </Button>
+          </>
+        }
+      >
+        <Field label="Início" className="w-[9.5rem]">
+          {(p) => <Input {...p} type="date" value={ini} onChange={(e) => e.target.value && setIni(e.target.value)} />}
+        </Field>
+        <Field label="Fim" className="w-[9.5rem]">
+          {(p) => <Input {...p} type="date" value={fin} onChange={(e) => e.target.value && setFin(e.target.value)} />}
+        </Field>
+        <Field label="Setor" className="w-full sm:w-56">
+          {(p) => (
+            <Select {...p} value={setorSel} onChange={(e) => setSetorSel(e.target.value)}>
+              <option value="todos">Todos os setores</option>
+              {setores.map(([cod, nome]) => (
+                <option key={cod} value={String(cod)}>{cod} · {nome}</option>
               ))}
-            </select>
-          </div>
-
-          {/* ✅ NOVO: Dia do planejamento (para montar vários dias) */}
-          <div className="col-span-6 md:col-span-2">
-            <label className="text-xs text-muted-foreground">Dia do planejamento (Gantt)</label>
-            <Input
-              type="date"
-              value={diaPlanejamento}
-              onChange={(e) => setDiaPlanejamento(e.target.value)}
-              className="text-xs"
-            />
-            <div className="mt-1 flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-7 px-2 text-2xs"
-                onClick={aplicarDiaPlanejamentoEmLote}
-                disabled={!atividades.length}
-              >
-                Aplicar em lote (dtPlan)
-              </Button>
+            </Select>
+          )}
+        </Field>
+        <Field label="Buscar" className="w-full sm:w-56">
+          {(p) => (
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input {...p} className="pl-9" placeholder="Atividade ou setor…" value={busca} onChange={(e) => setBusca(e.target.value)} />
             </div>
-          </div>
+          )}
+        </Field>
+        <div className="flex flex-wrap items-center gap-1.5 pb-0.5" role="group" aria-label="Status da demanda">
+          {STATUS.map((s) => (
+            <Chip key={s.v} ativo={status === s.v} onClick={() => setStatus(s.v)}>
+              {s.label}
+              {s.v === "pendentes" && qtdPendentes > 0 ? ` (${qtdPendentes})` : ""}
+            </Chip>
+          ))}
+        </div>
+      </PageHeader>
 
-          <div className="col-span-6 md:col-span-2">
-            <label className="text-xs text-muted-foreground">Início (demandas)</label>
-            <Input
-              type="date"
-              value={ini}
-              onChange={(e) => setIni(e.target.value)}
-              className="text-xs"
-            />
-          </div>
+      {erro && <Alert variant="destructive" title="Falha ao carregar">{erro}</Alert>}
+      {erroExterna && (
+        <Alert variant="warning" title="Carga de outras OPs indisponível">
+          {erroExterna} O quadro está considerando só esta OP.
+        </Alert>
+      )}
+      {!loading && !erro && demandas.length > 0 && colabs.length === 0 && (
+        <Alert variant="warning" title="Nenhum colaborador para alocar">
+          Não há colaborador ativo cujo cargo esteja ligado aos setores das demandas em AD_SETORESCARGO ({setores.map(([c]) => c).join(", ")}).
+        </Alert>
+      )}
 
-          <div className="col-span-6 md:col-span-2">
-            <label className="text-xs text-muted-foreground">Fim (demandas)</label>
-            <Input
-              type="date"
-              value={fin}
-              onChange={(e) => setFin(e.target.value)}
-              className="text-xs"
-            />
-          </div>
-        </CardContent>
+      <AlocacaoResumo r={resumo} loading={loading} onBacklog={() => setBacklogOpen(true)} />
+
+      {sobrecargas.length > 0 && (
+        <Alert variant="warning" title={`${sobrecargas.length} ${sobrecargas.length === 1 ? "colaborador-dia acima" : "colaboradores-dia acima"} da capacidade`}>
+          {sobrecargas.slice(0, 4).map((s) => `${s.nome} em ${toBR(s.dia)} (${num(s.total, 1)}/${num(s.cap, 1)} h)`).join(" · ")}
+          {sobrecargas.length > 4 && ` · e mais ${sobrecargas.length - 4}`}
+        </Alert>
+      )}
+
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 pb-2 pt-4">
+          <h3 className="text-base font-semibold">Carga × capacidade — {toBR(periodo.ini)} a {toBR(periodo.fin)}</h3>
+          {loadingExterna && <span className="text-2xs text-muted-foreground">atualizando outras OPs…</span>}
+        </div>
+        <QuadroCarga
+          dias={dias}
+          colabs={colabsVisiveis}
+          setores={setoresVisiveis}
+          demandas={demandas}
+          ix={ix}
+          cfg={cfg}
+          diaAtivo={diaGantt}
+          onDia={setDiaGantt}
+          onColab={setColabDetalheId}
+          carregando={loading}
+          truncado={quadroTruncado}
+        />
       </Card>
 
-      {erro && <div className="text-sm text-red-600">{erro}</div>}
-
-      {/* Grade de atividades */}
-      <Card>
-        <CardHeader className="py-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold">
-              Demandas da OP (grade) — {toBR(ini)} a {toBR(fin)}
-            </h4>
-            <Badge variant="outline" className="text-2xs">
-              {atividadesFiltradas.length}
-            </Badge>
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
+          <div>
+            <h3 className="text-base font-semibold">Demandas da OP</h3>
+            <p className="text-2xs text-muted-foreground">
+              {loading ? "Carregando…" : `${num(visiveis.length)} de ${num(demandas.length)} · marque para agir em lote`}
+            </p>
           </div>
-        </CardHeader>
-
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <div className="min-w-[980px]">
-              <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-1.5 border-b bg-muted/40">
-                <div className="col-span-4">Atividade</div>
-                <div className="col-span-2">Setor</div>
-                <div className="col-span-1 text-right">HH</div>
-                <div className="col-span-2">Demanda</div>
-                <div className="col-span-1">Planej.</div>
-                <div className="col-span-1">Alocar</div>
-                <div className="col-span-1 text-right">Ação</div>
-              </div>
-
-              <div className="max-h-[280px] overflow-y-auto divide-y">
-                {loading && (
-                  <div className="px-3 py-4 text-xs text-muted-foreground">Carregando dados…</div>
-                )}
-
-                {!loading &&
-                  atividadesFiltradas.map((a) => (
-                    <div
-                      key={a.id}
-                      className="grid grid-cols-12 items-center px-3 py-1.5 gap-2 bg-card text-xs"
-                    >
-                      <div className="col-span-4 truncate" title={a.nome}>
-                        {a.nome}
-                      </div>
-
-                      <div className="col-span-2">
-                        <Badge className={cn("text-2xs px-1 py-0", etapaBadgeStyles[a.etapa])}>
-                          {a.codusu} - {a.setor}
-                        </Badge>
-                      </div>
-
-                      <div className="col-span-1 text-right">{a.hhPrev}h</div>
-
-                      {/* Demanda */}
-                      <div className="col-span-2">{toBR(a.dtDemanda)}</div>
-
-                      {/* ✅ Planejamento editável (DTPLANEJAMENTO) */}
-                      <div className="col-span-1">
-                        <Input
-                          type="date"
-                          value={a.dtPlan}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setAtividades((arr) =>
-                              arr.map((x) => (x.id === a.id ? { ...x, dtPlan: v } : x))
-                            );
-                          }}
-                          className="h-7 px-1 text-2xs"
-                        />
-                      </div>
-
-                      <div className="col-span-1">
-                        <ColabMultiSelect
-                          atividade={a}
-                          colabs={colabsParaAlocar}
-                          setorAlocarLabel={setorSelecionado}
-                          onChange={(alocados) =>
-                            setAtividades((arr) =>
-                              arr.map((x) => (x.id === a.id ? { ...x, alocados } : x))
-                            )
-                          }
-                        />
-                      </div>
-
-                      <div className="col-span-1 text-right">
-                        {a.alocados.length > 0 && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-2xs px-1.5 h-7"
-                            onClick={() =>
-                              setAtividades((arr) =>
-                                arr.map((x) => (x.id === a.id ? { ...x, alocados: [] } : x))
-                              )
-                            }
-                          >
-                            Limpar
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-
-                {!loading && atividadesFiltradas.length === 0 && (
-                  <div className="px-3 py-4 text-xs text-muted-foreground">
-                    Nenhuma atividade encontrada com os filtros atuais.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ✅ Grade de colaboradores (AGORA FILTRADA pelo “Setor para alocar”) */}
-      <Card>
-        <CardHeader className="py-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold">Colaboradores (grade)</h4>
-            {setorSelecionado !== "Todos" ? (
-              <Badge variant="secondary" className="text-2xs">
-                Filtrado: {setorSelecionadoLabel}
-              </Badge>
-            ) : null}
-          </div>
-        </CardHeader>
-
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <div className="min-w-[720px]">
-              <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-1.5 border-b bg-muted/40">
-                <div className="col-span-4">Colaborador</div>
-                <div className="col-span-2 text-right">Atv tela</div>
-                <div className="col-span-2 text-right">HH tela</div>
-                <div className="col-span-2 text-right">Atv ERP</div>
-                <div className="col-span-2 text-right">Qtd ERP</div>
-              </div>
-
-              <div className="max-h-[220px] overflow-y-auto divide-y">
-                {colabsVisiveis.map((c) => {
-                  const tela = resumoColabTela(c.id);
-                  const qERP = c.atividadesERP.length;
-                  const qtdERP = c.atividadesERP.reduce((s, p) => s + p.qtd, 0);
-
-                  return (
-                    <div key={c.id} className="grid grid-cols-12 items-center px-3 py-1.5 gap-2 text-xs">
-                      <div className="col-span-4 flex items-center gap-2 min-w-0">
-                        <Avatar className="h-6 w-6">
-                          <AvatarFallback>{initials(c.nome)}</AvatarFallback>
-                        </Avatar>
-
-                        <div className="min-w-0">
-                          <p className="font-medium truncate">{c.nome}</p>
-                          <p className="text-2xs text-muted-foreground truncate">
-                            {c.cargo} • Setor: {c.codSetor || "-"}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="col-span-2 text-right">{tela.qtd}</div>
-                      <div className="col-span-2 text-right">{tela.hh.toFixed(1)}h</div>
-                      <div className="col-span-2 text-right">{qERP}</div>
-                      <div className="col-span-2 text-right">{qtdERP}</div>
-                    </div>
-                  );
-                })}
-
-                {!loading && !colabsVisiveis.length && (
-                  <div className="px-3 py-4 text-xs text-muted-foreground">
-                    Nenhum colaborador para o filtro atual.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ✅ Gantt por horas (AGORA POR DIA DE PLANEJAMENTO) */}
-      <Card>
-        <CardHeader className="py-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold">
-              Gantt — {toBR(diaPlanejamento)} (07h — 17h)
-            </h4>
-            <span className="text-2xs text-muted-foreground">
-              Clique em “Detalhes” para trocar colaborador no ERP.
-            </span>
-          </div>
-        </CardHeader>
-
-        <CardContent className="space-y-2">
-          <div className="overflow-x-auto">
-            <div className="min-w-[880px] space-y-1">
-              <div
-                className="grid items-center text-2xs text-muted-foreground"
-                style={{ gridTemplateColumns: "220px 1fr" }}
-              >
-                <div />
-                <div
-                  className="grid gap-[1px]"
-                  style={{
-                    gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))`,
-                  }}
-                >
-                  {hourTicks.map((h) => (
-                    <div key={h} className="text-center">
-                      {h}h
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="max-h-[260px] overflow-y-auto space-y-1 pr-1">
-                {colabsVisiveis.map((c) => {
-                  const blocks = buildBlocksForColab(atividades, c, diaPlanejamento);
-
-                  const telaDia = resumoColabTelaDia(c.id, diaPlanejamento);
-                  const hhErpDia = (c.atividadesERP || [])
-                    .filter((p) => p.dt === diaPlanejamento)
-                    .reduce((s, p) => s + p.qtd / 60, 0);
-
-                  const hhTotalDia = telaDia.hh + hhErpDia;
-
-                  return (
-                    <div
-                      key={c.id}
-                      className="grid items-center gap-2"
-                      style={{ gridTemplateColumns: "220px 1fr" }}
-                    >
-                      <div className="flex items-center gap-2 pr-2">
-                        <Avatar className="h-6 w-6">
-                          <AvatarFallback>{initials(c.nome)}</AvatarFallback>
-                        </Avatar>
-
-                        <div className="min-w-0">
-                          <p className="text-2xs font-medium truncate">{c.nome}</p>
-                          <p className="text-2xs text-muted-foreground truncate">
-                            {hhTotalDia.toFixed(1)}h no dia (tela + ERP)
-                          </p>
-                        </div>
-
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="ml-auto text-2xs px-2 py-1 h-7"
-                          onClick={() => openHab(c)}
-                        >
-                          Detalhes
-                        </Button>
-                      </div>
-
-                      <div>
-                        <div className="relative h-5 rounded-md bg-muted overflow-hidden">
-                          <div
-                            className="absolute inset-0 grid pointer-events-none"
-                            style={{
-                              gridTemplateColumns: `repeat(${TOTAL_HORAS}, minmax(0, 1fr))`,
-                            }}
-                          >
-                            {hourTicks.map((h) => (
-                              <div key={h} className="border-l border-white/40 last:border-r" />
-                            ))}
-                          </div>
-
-                          {blocks.map((b) => {
-                            const left = ((b.start - HORA_INI) / TOTAL_HORAS) * 100;
-                            const width = ((b.end - b.start) / TOTAL_HORAS) * 100;
-
-                            return (
-                              <div
-                                key={b.atividadeId}
-                                className={cn(
-                                  "absolute top-[2px] bottom-[2px] rounded-[3px] cursor-pointer hover:opacity-90 shadow-sm",
-                                  etapaColor[b.etapa]
-                                )}
-                                style={{ left: `${left}%`, width: `${width}%` }}
-                                title={`${b.label} (${b.start.toFixed(1)}h - ${b.end.toFixed(
-                                  1
-                                )}h)`}
-                                onClick={() => openHab(c)}
-                              />
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {!loading && !colabsVisiveis.length && (
-                  <div className="text-2xs text-muted-foreground px-1 py-2">
-                    Sem colaboradores para exibir o Gantt (verifique o filtro “Setor para alocar”).
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ✅ Modal Backlog (demandas atrasadas) */}
-      <Dialog.Root open={backlogOpen} onOpenChange={setBacklogOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/50" />
-          <Dialog.Content
-            className="
-              fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[980px]
-              -translate-x-1/2 -translate-y-1/2
-              rounded-2xl bg-card
-              border border-border
-              p-4 shadow-2xl outline-none
-              max-h-[90vh] overflow-y-auto
-            "
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => abrirDistribuicao(visiveis)}
+            disabled={loading || !visiveis.some((d) => !d.alocados.length)}
+            title="Sugere colaborador e dia para as demandas visíveis sem alocação"
           >
-            <div className="flex items-start justify-between gap-4 border-b pb-3">
-              <div>
-                <Dialog.Title className="text-base font-semibold">
-                  Backlog — Demandas atrasadas
-                </Dialog.Title>
-                <Dialog.Description className="text-xs text-muted-foreground">
-                  Atrasadas: DT demanda &lt; {toBR(todayStr)} • Total: {backlogAtividades.length}
-                </Dialog.Description>
-              </div>
+            <Sparkles className="h-4 w-4" /> Distribuir sem alocação
+          </Button>
+        </div>
+        <DemandasTable
+          rows={visiveis}
+          loading={loading}
+          ordem={ordem}
+          onOrdem={setOrdem}
+          selecionadas={selecionadas}
+          onSelecionar={selecionar}
+          colabs={colabs}
+          hoje={hoje}
+          livreDe={livreDe}
+          onDtPlan={(chave, dia) => alterar([chave], () => ({ dtPlan: dia }))}
+          onAlocados={(chave, ids) => alterar([chave], () => ({ alocados: ids }))}
+        />
+      </Card>
 
-              <Dialog.Close asChild>
-                <Button variant="ghost" size="icon" aria-label="Fechar">
-                  <X className="h-4 w-4" />
-                </Button>
-              </Dialog.Close>
-            </div>
+      <Card className="overflow-hidden pt-4">
+        <h3 className="px-4 pb-3 text-base font-semibold">Gantt do dia</h3>
+        {(diaGantt < faixaExterna.ini || diaGantt > faixaExterna.fin) && (
+          <p className="px-4 pb-2 text-2xs text-warning">Carga de outras OPs não carregada para este dia (fora do período consultado).</p>
+        )}
+        <GanttDia
+          dia={diaGantt}
+          onDia={setDiaGantt}
+          colabs={colabsVisiveis}
+          demandas={demandas}
+          externa={externa}
+          cfg={cfg}
+          setores={setores}
+          onColab={setColabDetalheId}
+        />
+      </Card>
 
-            <div className="mt-3 rounded-2xl border overflow-hidden">
-              <div className="grid grid-cols-12 text-2xs text-muted-foreground px-3 py-2 border-b bg-muted/40">
-                <div className="col-span-5">Atividade</div>
-                <div className="col-span-2">Setor</div>
-                <div className="col-span-1 text-right">HH</div>
-                <div className="col-span-2">Demanda</div>
-                <div className="col-span-2">Planejamento</div>
-              </div>
+      {selecionadas.size > 0 && (
+        <AcaoLoteBar
+          quantidade={selecionadas.size}
+          horas={horasSel}
+          diaSugerido={diaGantt}
+          setor={setorComumSel}
+          colabs={colabs}
+          livreDe={livreDe}
+          onAplicarData={(dia) => alterar(selecionadas, () => ({ dtPlan: dia }))}
+          onAlocar={(ids) => alterar(selecionadas, () => ({ alocados: ids }))}
+          onLimpar={() => alterar(selecionadas, () => ({ alocados: [] }))}
+          onDistribuir={() => abrirDistribuicao(selecionadasDem)}
+          onCancelar={() => setSelecionadas(new Set())}
+        />
+      )}
 
-              <div className="max-h-[60vh] overflow-y-auto divide-y">
-                {backlogAtividades.map((a) => (
-                  <div key={`b-${a.id}`} className="grid grid-cols-12 items-center px-3 py-2 gap-2 text-xs">
-                    <div className="col-span-5 truncate" title={a.nome}>
-                      {a.nome}
-                    </div>
-
-                    <div className="col-span-2">
-                      <Badge className={cn("text-2xs px-1 py-0", etapaBadgeStyles[a.etapa])}>
-                        {a.codusu} - {a.setor}
-                      </Badge>
-                    </div>
-
-                    <div className="col-span-1 text-right">{a.hhPrev}h</div>
-
-                    <div className="col-span-2">
-                      <span className="text-red-600 font-medium">{toBR(a.dtDemanda)}</span>
-                    </div>
-
-                    <div className="col-span-2 flex gap-2">
-                      <Input
-                        type="date"
-                        value={a.dtPlan}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setAtividades((arr) =>
-                            arr.map((x) => (x.id === a.id ? { ...x, dtPlan: v } : x))
-                          );
-                        }}
-                        className="h-7 px-1 text-2xs"
-                      />
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 px-2 text-2xs"
-                        onClick={() =>
-                          setAtividades((arr) =>
-                            arr.map((x) =>
-                              x.id === a.id ? { ...x, dtPlan: diaPlanejamento } : x
-                            )
-                          )
-                        }
-                      >
-                        = Dia
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-
-                {!loading && backlogAtividades.length === 0 && (
-                  <div className="px-3 py-6 text-xs text-muted-foreground">
-                    Nenhuma atividade atrasada encontrada.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-4 flex justify-end gap-2">
-              <Dialog.Close asChild>
-                <Button variant="outline">Fechar</Button>
-              </Dialog.Close>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      {/* Modal Habilidades / Atividades / Planejamento ERP */}
-      <Dialog.Root open={habOpen} onOpenChange={setHabOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/50" />
-          <Dialog.Content
-            className="
-              fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-[720px]
-              -translate-x-1/2 -translate-y-1/2
-              rounded-2xl bg-card 
-              border border-border
-              p-4 shadow-2xl outline-none
-              max-h-[90vh] overflow-y-auto
-            "
-          >
-            <div className="flex items-start justify-between gap-4 border-b pb-3">
-              <div>
-                <Dialog.Title className="text-base font-semibold">
-                  {habColab?.nome} • {habColab?.cargo}
-                </Dialog.Title>
-                <Dialog.Description className="text-xs text-muted-foreground">
-                  Habilidades e atividades no período (demandas {toBR(ini)} — {toBR(fin)})
-                </Dialog.Description>
-              </div>
-
-              <Dialog.Close asChild>
-                <Button variant="ghost" size="icon" aria-label="Fechar" onClick={closeHab}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </Dialog.Close>
-            </div>
-
-            <div className="mt-4 space-y-6">
-              <section>
-                <h4 className="text-sm font-medium mb-2">Habilidades</h4>
-                <div className="flex flex-wrap gap-2">
-                  {(habilidadesPorCargo[habColab?.cargo ?? "Colaborador"] || ["Operação geral"]).map(
-                    (h, i) => (
-                      <Badge key={i} variant="outline">
-                        {h}
-                      </Badge>
-                    )
-                  )}
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-sm font-medium mb-2">Atividades alocadas (tela)</h4>
-                <div className="rounded-2xl border divide-y">
-                  <div className="grid grid-cols-12 text-xs text-muted-foreground px-3 py-2">
-                    <div className="col-span-6">Atividade</div>
-                    <div className="col-span-2">Etapa</div>
-                    <div className="col-span-2">Planej.</div>
-                    <div className="col-span-2 text-right">HH</div>
-                  </div>
-
-                  {habColab
-                    ? atividades
-                        .filter((a) => a.alocados.includes(habColab.id) && a.dtPlan >= ini && a.dtPlan <= fin)
-                        .map((a) => {
-                          const share = a.alocados.length ? a.hhPrev / a.alocados.length : a.hhPrev;
-                          return (
-                            <div key={a.id} className="grid grid-cols-12 items-center px-3 py-2 gap-2 text-xs">
-                              <div className="col-span-6">{a.nome}</div>
-                              <div className="col-span-2">
-                                <Badge className={cn("text-2xs px-1 py-0", etapaBadgeStyles[a.etapa])}>
-                                  {a.etapa}
-                                </Badge>
-                              </div>
-                              <div className="col-span-2">{toBR(a.dtPlan)}</div>
-                              <div className="col-span-2 text-right">{share.toFixed(1)}h</div>
-                            </div>
-                          );
-                        })
-                    : null}
-
-                  {habColab &&
-                    atividades.filter((a) => a.alocados.includes(habColab.id) && a.dtPlan >= ini && a.dtPlan <= fin)
-                      .length === 0 && (
-                      <div className="px-3 py-6 text-xs text-muted-foreground">
-                        Nenhuma atividade alocada na tela neste período.
-                      </div>
-                    )}
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-sm font-medium mb-2">
-                  Planejamento ERP (AD_DETALCRONOGRAMAFUNC)
-                </h4>
-                <div className="rounded-2xl border divide-y">
-                  <div className="grid grid-cols-12 text-xs text-muted-foreground px-3 py-2">
-                    <div className="col-span-4">Atividade</div>
-                    <div className="col-span-2">Data</div>
-                    <div className="col-span-2 text-right">Qtd (min)</div>
-                    <div className="col-span-3">Novo colaborador</div>
-                    <div className="col-span-1 text-right">Ação</div>
-                  </div>
-
-                  {habColab && habColab.atividadesERP.length > 0 ? (
-                    habColab.atividadesERP.map((p, i) => (
-                      <div
-                        key={`${habColab.id}-${p.seq}-${p.codprod}-${p.dt}-${i}`}
-                        className="grid grid-cols-12 items-center px-3 py-2 gap-2 text-xs"
-                      >
-                        <div className="col-span-4">
-                          {p.codprod} - {p.descrprod}
-                        </div>
-                        <div className="col-span-2">{toBR(p.dt)}</div>
-                        <div className="col-span-2 text-right">{p.qtd}</div>
-                        <div className="col-span-3">
-                          <select
-                            className="w-full rounded-md border bg-background px-2 py-1 text-2xs"
-                            value={novoDestinoPorSeq[p.seq] ?? ""}
-                            onChange={(e) =>
-                              setNovoDestinoPorSeq((prev) => ({
-                                ...prev,
-                                [p.seq]: e.target.value ? Number(e.target.value) : "",
-                              }))
-                            }
-                          >
-                            <option value="">Selecione…</option>
-                            {/* ✅ respeita o filtro de setor também */}
-                            {colabsParaAlocar
-                              .filter((c) => c.id !== habColab.id)
-                              .map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.id} - {c.nome}
-                                </option>
-                              ))}
-                          </select>
-                        </div>
-                        <div className="col-span-1 text-right">
-                          <Button
-                            size="sm"
-                            className="text-2xs px-2 h-7"
-                            variant="outline"
-                            disabled={loadingSeq === p.seq}
-                            onClick={() => handleTrocarFuncionarioErpItem(p)}
-                          >
-                            {loadingSeq === p.seq ? "..." : "Trocar"}
-                          </Button>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="px-3 py-6 text-xs text-muted-foreground">
-                      Nenhuma atividade planejada no ERP para esta OP.
-                    </div>
-                  )}
-                </div>
-              </section>
-            </div>
-
-            <div className="mt-6 flex justify-end gap-2">
-              <Dialog.Close asChild>
-                <Button variant="outline" onClick={closeHab}>
-                  Fechar
-                </Button>
-              </Dialog.Close>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <BacklogDialog
+        open={backlogOpen}
+        onOpenChange={setBacklogOpen}
+        demandas={demandas.filter(doSetor)}
+        hoje={hoje}
+        diaSugerido={diaGantt < hoje ? hoje : diaGantt}
+        onDtPlan={(chaves, dia) => alterar(chaves, () => ({ dtPlan: dia }))}
+        onSelecionar={(chaves) => {
+          selecionar(chaves, true);
+          setStatus("atrasadas");
+        }}
+      />
+      <CapacidadeDialog
+        open={capOpen}
+        onOpenChange={setCapOpen}
+        cfg={cfg}
+        onSalvar={(c) => {
+          setCfg(c);
+          gravarCapacidade(c);
+        }}
+      />
+      <DistribuicaoDialog sugestao={sugestao} colabs={colabs} onAplicar={aplicarDistribuicao} onFechar={() => setSugestao(null)} />
+      <ColabDetalheDialog
+        colab={colabDetalhe}
+        onFechar={() => setColabDetalheId(null)}
+        dias={dias}
+        ix={ix}
+        cfg={cfg}
+        demandas={demandas}
+        colabs={colabs}
+        onTrocar={trocar}
+      />
+      <FalhasGravacaoDialog resultado={falhas} colabs={colabs} onFechar={() => setFalhas(null)} />
     </div>
   );
 }

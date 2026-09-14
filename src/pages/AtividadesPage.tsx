@@ -5,6 +5,7 @@ import { obterReg } from "@/lib/obterReg";
 import { mesAnoKey, monthYearLabel, pad2 } from "@/lib/datetime";
 import { txt, type ErpRow } from "@/lib/format";
 import { mensagemErro } from "@/lib/sankhyaRetorno";
+import { ORDEM_LINHAS, sqlLinhaProduto } from "@/lib/linhasProduto";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,9 +50,6 @@ function statusFromAvanco(prev: number, real: number): StatusOP {
   if (real >= prev - 10) return "Em dia";
   return "Baixo avanço";
 }
-
-/** Ordem de exibição das linhas; as mesmas etiquetas do CASE da consulta. */
-const ORDEM_LINHAS = ["NX 260-290", "NX 340-350", "NX 360-370", "NX 410", "NX 440", "NX 500"];
 
 /* ── Período do cronograma ───────────────────────────────────────
    O cronograma é mensal (AD_CRONOGRAMA.ANO / MES). O período é escolhido
@@ -199,15 +197,7 @@ export default function AtividadesPage() {
               ONE_NUMEROSUPPROD_REA(DET.CODUSU , DET.SEQ)  as AvReal,
               DET.SEQ,
               PROC.IDIPROC,
-              CASE 
-                WHEN PAI.AD_CODGRUPOPROD IN (020100,020200,020300,020400,021000) THEN 'NX 260-290'
-                WHEN PAI.AD_CODGRUPOPROD IN (020800,021400) THEN 'NX 340-350'
-                WHEN PAI.AD_CODGRUPOPROD IN (020500,020600) THEN 'NX 360-370'
-                WHEN PAI.AD_CODGRUPOPROD IN (020700,021300) THEN 'NX 410'
-                WHEN PAI.AD_CODGRUPOPROD IN (021200) THEN 'NX 440'
-                WHEN PAI.AD_CODGRUPOPROD IN (020900,021100) THEN 'NX 500'
-                ELSE GRU2.DESCRGRUPOPROD
-              END AS DESCRGRUPOPROD,
+              ${sqlLinhaProduto("PAI", "GRU2.DESCRGRUPOPROD")} AS DESCRGRUPOPROD,
               PRJ.CODPROJ,
               PRJ.IDENTIFICACAO,
               PAR.CODPARC,

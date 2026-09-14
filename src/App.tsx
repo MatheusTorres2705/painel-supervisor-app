@@ -16,6 +16,7 @@ import PiramidePage from "@/pages/PiramidePage";
 import AtividadesPage from "@/pages/AtividadesPage";
 import AlocacaoPage from "@/pages/AlocacaoPage";
 import MateriaisPage from "@/pages/MateriaisPage";
+import ListaFaltasPage from "@/pages/ListaFaltasPage";
 import CalendarioPage from "@/pages/CalendarioPage";
 import HoraExtraPage from "@/pages/HoraExtraPage";
 import AbsenteismoPage from "@/pages/AbsenteismoPage";
@@ -53,6 +54,7 @@ export default function App() {
                 element={<AlocacaoPage />}
               />
               <Route path="/materiais" element={<MateriaisPage />} />
+              <Route path="/lista-faltas" element={<ListaFaltasPage />} />
               <Route path="/calendario" element={<CalendarioPage />} />
               <Route path="/hora-extra" element={<HoraExtraPage />} />
               <Route path="/absenteismo" element={<AbsenteismoPage />} />
