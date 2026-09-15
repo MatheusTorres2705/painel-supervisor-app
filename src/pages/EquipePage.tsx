@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { obterReg } from "@/lib/obterReg";
 import { useAuth } from "@/auth/AuthProvider";
 import { api } from "@/lib/api";
+import { fotoUrl } from "@/lib/fotoFuncionario";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -129,9 +130,6 @@ function comportTone(v: number | null) {
   }
   return atingimentoTone(v);
 }
-
-const fotoUrl = (codfunc: number) =>
-  `http://sankhya.nxboats.com.br:8180/mge/Funcionario@IMAGEM@CODEMP=1@CODFUNC=${codfunc}.dbimage`;
 
 export default function EquipePage() {
   const navigate = useNavigate();

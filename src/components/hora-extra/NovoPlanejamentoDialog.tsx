@@ -30,6 +30,7 @@ import { EmptyState } from "@/components/patterns/EmptyState";
 import { cn } from "@/lib/utils";
 import { duracaoMin, formatDuracao } from "@/lib/horas";
 import { toBR } from "@/lib/format";
+import { fotoUrl } from "@/lib/fotoFuncionario";
 
 export type DepOpt = { coddep: number; descrdep: string };
 
@@ -40,9 +41,6 @@ export type FuncOpt = {
   descrdep: string;
   descrcargo: string;
 };
-
-const fotoUrl = (codfunc: number) =>
-  `https://sankhya.nxboats.com.br:8180/mge/Funcionario@IMAGEM@CODEMP=1@CODFUNC=${codfunc}.dbimage`;
 
 function Passo({
   n,

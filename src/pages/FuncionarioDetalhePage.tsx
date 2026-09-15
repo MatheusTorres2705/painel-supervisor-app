@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { obterReg } from "@/lib/obterReg";
 import { api } from "@/lib/api";
+import { fotoUrl } from "@/lib/fotoFuncionario";
 
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -117,9 +118,6 @@ type OcorrenciaItem = {
 /* =========================================================
    HELPERS
 ========================================================= */
-
-const fotoUrl = (codfunc: number) =>
-  `http://sankhya.nxboats.com.br:8180/mge/Funcionario@IMAGEM@CODEMP=1@CODFUNC=${codfunc}.dbimage`;
 
 const NOTE_OPTIONS = [
   { value: 1, label: "1 - Muito abaixo expectativa" },
