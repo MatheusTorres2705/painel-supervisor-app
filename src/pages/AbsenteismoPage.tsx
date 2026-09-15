@@ -35,6 +35,11 @@ import { int, hours as fmtHours, pct as fmtPct } from "@/lib/formatDiretoria";
 import { MESES_CURTO, MESES_LONGO } from "@/lib/datetime";
 import type { ErpRow } from "@/lib/format";
 import { mensagemErro } from "@/lib/sankhyaRetorno";
+import {
+  taxaAbs, type Sup,
+  makeSqlMensal, makeSqlEfetivoMensal, makeSqlDia, makeSqlGerentes, makeSqlSupervisores,
+  makeSqlFuncionarios, makeSqlDiasColab, makeSqlTopMes, makeSqlReincidencia,
+} from "@/services/absenteismoService";
 import { PANEL_MARGIN, PANEL_Y_WIDTH, axisProps, chartSemantic, gridProps, legendProps, token } from "@/lib/chartTheme";
 import { cn } from "@/lib/utils";
 import { Alert } from "@/components/ui/alert";
@@ -54,7 +59,6 @@ const n = (v: unknown) => (v == null || v === "" ? 0 : Number(v));
 const s = (v: unknown) => (v == null ? "" : String(v));
 const getAny = (row: ErpRow, key: string): unknown =>
   row?.[key] ?? row?.[key.toUpperCase()] ?? row?.[key.toLowerCase()];
-const esc = (v: string) => v.replace(/'/g, "''");
 
 /* Formatação delegada a @/lib/formatDiretoria — os nomes locais viram aliases
    finos para não alterar os pontos de chamada copiados. */
@@ -64,24 +68,9 @@ const pct = (v: number) => fmtPct(v, { decimals: 2 });
 
 const MESES_PT = MESES_CURTO.slice(1);   // esta tela indexa por 0 (mes-1)
 const MESES_FULL = MESES_LONGO.slice(1);
-const oracleData = (d: string) => `TO_DATE('${d}','DD/MM/YYYY')`;
 const pad2 = (x: number) => String(x).padStart(2, "0");
 
-// Taxa de absenteísmo = HH perdido ÷ HH disponível × 100
-const taxaAbs = (hhFalta: number, hhDisp: number) => (hhDisp > 0 ? (hhFalta / hhDisp) * 100 : 0);
-// Condição "colaborador disponível no dia D" (DTADM ≤ D e não demitido até D)
-const ATIVO_NO_DIA = (col: string) => `TRUNC(F.DTADM) <= ${col} AND (F.DTDEM IS NULL OR TRUNC(F.DTDEM) >= ${col})`;
 
-/* ── Escopo "Apenas meus colaboradores" (só neste painel) ──────────
-   `sup` = CODUSU do supervisor logado, ou null para a empresa toda.
-   O casamento com AD_VFALTA é por CODFUNC, igual ao JOIN que já existia em
-   FROM_BASE. */
-type Sup = number | null;
-/** Para consultas que já têm TFPFUN com alias. */
-const escopoFun = (alias: string, sup: Sup) => (sup == null ? "" : ` AND ${alias}.USUVPJSUP = ${Number(sup)}`);
-/** Para consultas só em AD_VFALTA. */
-const escopoFalta = (col: string, sup: Sup) =>
-  sup == null ? "" : ` AND ${col} IN (SELECT CODFUNC FROM TFPFUN WHERE USUVPJSUP = ${Number(sup)})`;
 
 const CHAVE_MEUS = "absenteismo:apenas-meus";
 function lerMeus(): boolean {
@@ -99,117 +88,6 @@ const COR = {
   faltas: chartSemantic.primary,
 };
 
-/* ===================== SQL (view AD_VFALTA + TFPFUN) ===================== */
-// Faltas mês a mês (efetivo/HH disponível vem de SQL_EFETIVO_MENSAL)
-const makeSqlMensal = (sup: Sup) => `
-SELECT ANOREF, MESREF,
-  COUNT(DISTINCT CODFUNC) AS FALTANTES,
-  COUNT(*)                AS FALTAS,
-  SUM(HH_PERDIDO)         AS HH_PERDIDO
-FROM AD_VFALTA
-WHERE 1 = 1${escopoFalta("CODFUNC", sup)}
-GROUP BY ANOREF, MESREF
-ORDER BY ANOREF, TO_NUMBER(MESREF)
-`;
-
-// Efetivo disponível por mês — dias úteis (seg–sex) × ativos no dia (DTADM/DTDEM)
-const makeSqlEfetivoMensal = (ini: string, fim: string, sup: Sup) => `
-WITH DIAS AS (
-  SELECT D FROM (
-    SELECT ${oracleData(ini)} + LEVEL - 1 AS D
-    FROM DUAL CONNECT BY LEVEL <= ${oracleData(fim)} - ${oracleData(ini)} + 1
-  )
-  WHERE TO_CHAR(D,'DY','NLS_DATE_LANGUAGE=ENGLISH') NOT IN ('SAT','SUN')
-),
-EFETIVO AS (
-  SELECT D.D, COUNT(*) AS ATIVOS
-  FROM DIAS D
-  JOIN TFPFUN F ON ${ATIVO_NO_DIA("D.D")}${escopoFun("F", sup)}
-  GROUP BY D.D
-)
-SELECT TO_CHAR(D,'YYYY') AS ANOREF, TO_CHAR(D,'MM') AS MESREF,
-  COUNT(*)           AS DIAS_UTEIS,
-  ROUND(AVG(ATIVOS)) AS EFETIVO_MEDIO,
-  SUM(ATIVOS) * 8    AS HH_DISPONIVEL
-FROM EFETIVO
-GROUP BY TO_CHAR(D,'YYYY'), TO_CHAR(D,'MM')
-ORDER BY 1, 2
-`;
-
-// Diário — faltas por dia + ativos no próprio dia (DTADM/DTDEM)
-const makeSqlDia = (ini: string, fim: string, sup: Sup) => `
-SELECT g.DIA, g.FALTAS, g.HH_PERDIDO,
-  (SELECT COUNT(*) FROM TFPFUN F WHERE ${ATIVO_NO_DIA("g.DT")}${escopoFun("F", sup)}) AS ATIVOS,
-  ROUND(100 * g.FALTAS / NULLIF((SELECT COUNT(*) FROM TFPFUN F WHERE ${ATIVO_NO_DIA("g.DT")}${escopoFun("F", sup)}),0), 2) AS PCT_ABSENTEISMO
-FROM (
-  SELECT TRUNC(DTREF) AS DT, TO_CHAR(DTREF,'DD/MM/YYYY') AS DIA,
-    COUNT(*) AS FALTAS, SUM(HH_PERDIDO) AS HH_PERDIDO
-  FROM AD_VFALTA
-  WHERE TRUNC(DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFalta("CODFUNC", sup)}
-  GROUP BY TRUNC(DTREF), TO_CHAR(DTREF,'DD/MM/YYYY')
-) g
-ORDER BY g.DT
-`;
-
-const FROM_BASE = (ini: string, fim: string, sup: Sup) => `
-FROM AD_VFALTA v
-JOIN TFPFUN f ON f.CODFUNC = v.CODFUNC
-WHERE TRUNC(v.DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFun("f", sup)}`;
-const GERENTE_EXPR = `NVL(f.AD_GERENTE,'(sem gerente)')`;
-const SUPERVISOR_EXPR = `NVL(v.GESTOR,'(sem gestor)')`;
-const METRICAS = `COUNT(*) AS FALTAS, COUNT(DISTINCT v.CODFUNC) AS FALTANTES, SUM(v.HH_PERDIDO) AS HH_PERDIDO`;
-
-// Nível 0 — por gerente
-const makeSqlGerentes = (ini: string, fim: string, sup: Sup) => `
-SELECT ${GERENTE_EXPR} AS GERENTE, ${METRICAS}
-${FROM_BASE(ini, fim, sup)}
-GROUP BY ${GERENTE_EXPR}
-ORDER BY FALTAS DESC
-`;
-
-// Nível 1 — supervisores de um gerente
-const makeSqlSupervisores = (ini: string, fim: string, gerente: string, sup: Sup) => `
-SELECT ${SUPERVISOR_EXPR} AS SUPERVISOR, ${METRICAS}
-${FROM_BASE(ini, fim, sup)}
-  AND ${GERENTE_EXPR} = '${esc(gerente)}'
-GROUP BY ${SUPERVISOR_EXPR}
-ORDER BY FALTAS DESC
-`;
-
-// Nível 2 — colaboradores de gerente + supervisor
-const makeSqlFuncionarios = (ini: string, fim: string, gerente: string, supervisor: string, sup: Sup) => `
-SELECT v.CODFUNC, v.NOMEFUNC, COUNT(*) AS FALTAS, SUM(v.HH_PERDIDO) AS HH_PERDIDO
-${FROM_BASE(ini, fim, sup)}
-  AND ${GERENTE_EXPR} = '${esc(gerente)}'
-  AND ${SUPERVISOR_EXPR} = '${esc(supervisor)}'
-GROUP BY v.CODFUNC, v.NOMEFUNC
-ORDER BY FALTAS DESC
-`;
-
-// Nível 3 — dias da falta de um colaborador
-const makeSqlDiasColab = (ini: string, fim: string, codfunc: number) => `
-SELECT TO_CHAR(DTREF,'DD/MM/YYYY') AS DIA, HH_PERDIDO
-FROM AD_VFALTA
-WHERE TRUNC(DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}
-  AND CODFUNC = ${Number(codfunc)}
-ORDER BY DTREF
-`;
-
-// Análise do mês — colaboradores que mais faltaram (com gerente/supervisor)
-const makeSqlTopMes = (ini: string, fim: string, sup: Sup) => `
-SELECT v.CODFUNC, v.NOMEFUNC, ${GERENTE_EXPR} AS GERENTE, ${SUPERVISOR_EXPR} AS SUPERVISOR,
-  COUNT(*) AS FALTAS, SUM(v.HH_PERDIDO) AS HH_PERDIDO
-${FROM_BASE(ini, fim, sup)}
-GROUP BY v.CODFUNC, v.NOMEFUNC, ${GERENTE_EXPR}, ${SUPERVISOR_EXPR}
-ORDER BY FALTAS DESC
-`;
-// Reincidência — faltas por colaborador por mês (janela do histórico)
-const makeSqlReincidencia = (ini: string, fim: string, sup: Sup) => `
-SELECT CODFUNC, ANOREF, MESREF, COUNT(*) AS FALTAS
-FROM AD_VFALTA
-WHERE TRUNC(DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFalta("CODFUNC", sup)}
-GROUP BY CODFUNC, ANOREF, MESREF
-`;
 
 /* ===================== Tipos ===================== */
 type MensalRow = { ano: number; mes: number; faltantes: number; faltas: number; hh: number };

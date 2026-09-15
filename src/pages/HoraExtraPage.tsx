@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { obterReg } from "@/lib/obterReg";
+import { FROM_HORA_EXTRA, escopoSupervisor } from "@/services/horaExtraService";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthProvider";
@@ -109,21 +110,7 @@ function ymdToBrDate(ymd: string) {
  */
 const CAB_DATE_FIELD: "DTUSO" | "DTUSU" = "DTUSO";
 
-/**
- * Base comum da lista e do comparativo. Os INNER JOIN com TSIUSU também filtram
- * (colaborador sem supervisor cadastrado não aparece): por isso as duas
- * consultas precisam dos mesmos JOINs, senão contam universos diferentes.
- */
-const FROM_HORA_EXTRA = `
-        FROM AD_BANCOHORAS HR
-        JOIN AD_BCOFUN FUN ON FUN.CODBANCOHORAS = HR.CODBANCOHORAS
-        JOIN TFPFUN F ON F.CODFUNC = FUN.CODFUNC
-        JOIN TSIUSU SUP ON SUP.CODUSU = F.USUVPJSUP
-        JOIN TSIUSU SOL ON SOL.CODUSU = HR.CODUSU`;
-
-/** Eventos em que o usuário é supervisor do colaborador ou quem solicitou. */
-const escopoSupervisor = (codusu: number) =>
-  `(F.USUVPJSUP = ${Number(codusu)} OR HR.CODUSU = ${Number(codusu)})`;
+/* FROM_HORA_EXTRA e escopoSupervisor: services/horaExtraService (o Dashboard usa os mesmos). */
 
 /**
  * Filtros e indicadores ficam fixos no topo só em tela larga E alta. No tablet

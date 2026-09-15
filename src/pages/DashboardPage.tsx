@@ -1,1377 +1,494 @@
 // src/pages/DashboardPage.tsx
-import { useEffect, useMemo, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+// Central do supervisor — abre o dia com o que precisa de ação, os indicadores do
+// mês e um atalho para cada rotina.
+//
+// Cada número vem da MESMA consulta e da mesma conta da tela de origem (as
+// consultas foram extraídas para services/ sem mudar o SQL), para o Dashboard
+// nunca discordar da tela que o supervisor abre ao clicar:
+//   hora extra ...... horaExtraService   (tela Hora Extra)
+//   assiduidade ..... absenteismoService (tela Absenteísmo)
+//   OPs ............. opsService         (tela Atividades / OP)
+//   materiais ....... comprasService + lib/listaFaltas (tela Lista de Faltas)
+//   retrabalho ...... retrabalhoService
+//   meta / OPE ...... mnoService+mnoCalc / opeService (sempre da fábrica)
+//
+// O que saiu do Dashboard antigo e por quê:
+//  · "HE disponível × consumida" e "Assiduidade" eram valores fixos (simulados);
+//  · "Atividades por colaborador" somava o PLANEJADO de todo o histórico e o
+//    detalhe listava todos os colaboradores (filtro comentado no SQL);
+//  · "Senioridade" tem tela própria (Pirâmide) e usava um departamento fixo;
+//  · materiais faltantes usavam outra lista de produtos ignorados que a Lista de
+//    Faltas — os números não batiam.
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlarmClock,
   Award,
-  Clock3,
+  CalendarCheck,
+  ClipboardList,
   Factory,
   Gauge,
+  PackageX,
   RefreshCw,
-  Users,
+  Target,
+  Timer,
+  UserX,
+  Wrench,
 } from "lucide-react";
-import { mockKpis } from "@/lib/mock";
-import {
-  ResponsiveContainer,
-  BarChart,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Bar,
-  Legend,
-} from "recharts";
-import { useAuth } from "@/auth/AuthProvider";
-import { obterReg } from "@/lib/obterReg";
-import { cn } from "@/lib/utils";
 
-import { Input } from "@/components/ui/input";
-import { Field } from "@/components/ui/field";
-import { Select } from "@/components/ui/select";
+import { useAuth } from "@/auth/AuthProvider";
+import { getResumoHoraExtra } from "@/services/horaExtraService";
+import { getAssiduidade, getFaltasRecentes } from "@/services/absenteismoService";
+import { getOpsAvanco, pctAvanco, statusAvanco } from "@/services/opsService";
+import { getListaFaltas } from "@/services/comprasService";
+import { getRetrabalho } from "@/services/retrabalhoService";
+import { getRealizadoDiaSetor, getRealizadoSetorMes } from "@/services/mnoService";
+import { LINHAS_MAIORES_ARR, LINHAS_MENORES_ARR, agregar, getOpeDados, totaisOpe } from "@/services/opeService";
+import { resumoMno } from "@/lib/mnoCalc";
+import { farolOpe } from "@/lib/opeConfig";
+import { agruparPorLinhaEBarco, porGravidade } from "@/lib/listaFaltas";
+import { MESES_LONGO, dataOracle, isDiaUtil, isoLocal, pad2, ultimoDia } from "@/lib/datetime";
+import { num, toBR } from "@/lib/format";
+import { mensagemErro } from "@/lib/sankhyaRetorno";
+import type { Tone } from "@/lib/tone";
+
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatCard } from "@/components/patterns/StatCard";
-import { AsyncBoundary } from "@/components/patterns/AsyncBoundary";
-import { DataDialog } from "@/components/patterns/DataDialog";
-import {
-  axisProps,
-  chartSemantic,
-  gridProps,
-  legendProps,
-  seriesColor,
-  tooltipProps,
-  token,
-} from "@/lib/chartTheme";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Chip } from "@/components/ui/chip";
+import { Select } from "@/components/ui/select";
+import { AcaoCard } from "@/components/dashboard/AcaoCard";
+import { BlocoDashboard } from "@/components/dashboard/BlocoDashboard";
+import { EquipeFaltas } from "@/components/dashboard/EquipeFaltas";
+import { FaltasPorBarco } from "@/components/dashboard/FaltasPorBarco";
+import { OpsAtrasadas } from "@/components/dashboard/OpsAtrasadas";
+import { RetrabalhoTop } from "@/components/dashboard/RetrabalhoTop";
+import { OpeAuditoriaDialog } from "@/components/ope/OpeAuditoriaDialog";
 
-
-/* =================== Types =================== */
-type BarColab = {
-  codfunc: number;
-  name: string;
-  hh: number;
-};
-
-type DetAtividade = {
-  descrprod: string;
-  dtexecucao: string;
-  hh: number;
-};
-
-type SeniorCompareBar = {
-  nivel: "I" | "II" | "III";
-  label: string;
-  atual: number;
-  previsto: number;
-  diff: number;
-  pct: number | null;
-};
-
-type SeniorColab = {
-  codfunc: number;
-  nomefunc: string;
-  nivel: "I" | "II" | "III";
-};
-
-type FaltaItem = {
-  chassi: string;
-  codprod: number;
-  descrprod: string;
-  necessidade: string;
-  dataEntrega: string;
-};
-
-type RetrabItem = {
-  setor: string;
-  atividade: string;
-  hh: number;
-};
-
-/* =================== Helpers =================== */
-function normalizeNivel(raw: any): "I" | "II" | "III" | null {
-  const up = String(raw ?? "").trim().toUpperCase();
-  if (up === "III" || up.startsWith("III")) return "III";
-  if (up === "II" || up.startsWith("II")) return "II";
-  if (up === "I" || up.startsWith("I")) return "I";
-  return null;
+/* ── Escopo "Meus / Todos" ───────────────────────────────────── */
+const CHAVE_ESCOPO = "dashboard:escopo";
+type Escopo = "meus" | "todos";
+function lerEscopo(): Escopo {
+  try {
+    return localStorage.getItem(CHAVE_ESCOPO) === "todos" ? "todos" : "meus";
+  } catch {
+    return "meus";
+  }
+}
+function gravarEscopo(e: Escopo) {
+  try {
+    localStorage.setItem(CHAVE_ESCOPO, e);
+  } catch {
+    /* armazenamento bloqueado: só não lembra */
+  }
 }
 
-function nivelLabel(n: "I" | "II" | "III") {
-  if (n === "I") return "Nível I";
-  if (n === "II") return "Nível II";
-  return "Nível III";
+/* ── Carga de um bloco ───────────────────────────────────────── */
+type Consulta<T> = { dados: T | null; loading: boolean; erro: string | null };
+
+/**
+ * Busca independente por bloco: cada um tem seu loading/erro, e uma resposta
+ * atrasada de um filtro antigo é descartada (`cancelado`).
+ */
+function useConsulta<T>(carregar: () => Promise<T>, deps: unknown[]): Consulta<T> & { recarregar: () => void } {
+  const [estado, setEstado] = useState<Consulta<T>>({ dados: null, loading: true, erro: null });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let cancelado = false;
+    setEstado((e) => ({ ...e, loading: true, erro: null }));
+    carregar()
+      .then((dados) => !cancelado && setEstado({ dados, loading: false, erro: null }))
+      .catch((e: unknown) => !cancelado && setEstado({ dados: null, loading: false, erro: mensagemErro(e, "Falha ao carregar.") }));
+    return () => {
+      cancelado = true;
+    };
+    // `carregar` muda a cada render; as dependências reais vêm em `deps`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...deps, tick]);
+  const recarregar = useCallback(() => setTick((t) => t + 1), []);
+  return { ...estado, recarregar };
 }
 
-function fmtInt(n: number) {
-  return Number.isFinite(n) ? Math.round(n).toString() : "0";
+/* ── Utilitários de data ─────────────────────────────────────── */
+const DIAS_SEMANA = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
+
+/** Último dia útil (seg–sex) antes de `d`. */
+function diaUtilAnterior(d: Date): Date {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+  while (!isDiaUtil(x)) x.setDate(x.getDate() - 1);
+  return x;
 }
 
-function fmtPct(p: number | null) {
-  if (p === null || !Number.isFinite(p)) return "—";
-  return `${Math.round(p * 100)}%`;
+const horas = (min: number) => min / 60;
+const h1 = (v: number) => `${num(v, 1)} h`;
+
+/** Delta formatado para o StatCard; `null` quando não há base de comparação. */
+function delta(atual: number, anterior: number | null | undefined, sufixo: string, casas = 1) {
+  if (anterior == null) return undefined;
+  const d = atual - anterior;
+  if (Math.abs(d) < 10 ** -casas / 2) return undefined;
+  return { value: `${d > 0 ? "+" : "−"}${num(Math.abs(d), casas)}${sufixo} vs mês ant.`, direction: d > 0 ? ("up" as const) : ("down" as const) };
 }
-
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function nowYearMonth() {
-  const d = new Date();
-  return { year: String(d.getFullYear()), month: String(d.getMonth() + 1) }; // month 1..12
-}
-
-function monthYearLabel(monthNum: string, year: string) {
-  const mm = pad2(Number(monthNum || 1));
-  return `${mm}/${year}`;
-}
-
-/* =================== Gauge (Velocímetro) =================== */
-// SVG puro num único sistema de coordenadas. A versão anterior sobrepunha um
-// <svg> com viewBox fixo sobre um <PieChart> responsivo, e a agulha saía do arco.
-
-const GAUGE = { cx: 100, cy: 104, r: 76, stroke: 16 } as const;
-
-/** Valor 0..100 -> ângulo em graus (180 = esquerda, 0 = direita). */
-const gaugeAngle = (v: number) => 180 - 1.8 * clamp(v, 0, 100);
-
-function polar(angleDeg: number, radius: number) {
-  const rad = (Math.PI / 180) * angleDeg;
-  return {
-    x: GAUGE.cx + radius * Math.cos(rad),
-    y: GAUGE.cy - radius * Math.sin(rad),
-  };
-}
-
-/** Caminho de arco entre dois valores da escala. */
-function arcPath(from: number, to: number) {
-  const a = polar(gaugeAngle(from), GAUGE.r);
-  const b = polar(gaugeAngle(to), GAUGE.r);
-  const large = Math.abs(gaugeAngle(from) - gaugeAngle(to)) > 180 ? 1 : 0;
-  return `M ${a.x} ${a.y} A ${GAUGE.r} ${GAUGE.r} 0 ${large} 1 ${b.x} ${b.y}`;
-}
-
-const SpeedometerGauge = ({
-  value,
-  max = 100,
-  title,
-}: {
-  value: number;
-  max?: number;
-  title?: string;
-}) => {
-  const v = clamp(value, 0, max);
-  const shown = Math.round(max > 0 ? (v / max) * 100 : 0);
-
-  const status =
-    shown >= 90 ? "Excelente" : shown >= 80 ? "Boa" : shown >= 70 ? "Atenção" : "Crítica";
-
-  // Faixas: 0–70 crítica, 70–90 atenção, 90–100 excelente.
-  const bands = [
-    { from: 0, to: 70, color: chartSemantic.danger },
-    { from: 70, to: 90, color: chartSemantic.warning },
-    { from: 90, to: 100, color: chartSemantic.success },
-  ];
-
-  const needle = polar(gaugeAngle(shown), GAUGE.r - GAUGE.stroke / 2 - 6);
-
-  return (
-    <div
-      className="flex h-full w-full flex-col items-center justify-center gap-2"
-      role="img"
-      aria-label={`${title ?? "Indicador"}: ${shown}% — ${status}. Meta: 90%.`}
-    >
-      {title ? (
-        <div className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-          {title}
-        </div>
-      ) : null}
-
-      <svg
-        viewBox="0 0 200 124"
-        className="w-full max-w-[280px]"
-        aria-hidden="true"
-      >
-        {bands.map((b) => (
-          <path
-            key={b.from}
-            d={arcPath(b.from, b.to)}
-            fill="none"
-            stroke={b.color}
-            strokeWidth={GAUGE.stroke}
-            strokeLinecap="butt"
-          />
-        ))}
-
-        {/* Marca da meta (90%) */}
-        <line
-          {...(() => {
-            const a = polar(gaugeAngle(90), GAUGE.r - GAUGE.stroke / 2);
-            const b = polar(gaugeAngle(90), GAUGE.r + GAUGE.stroke / 2);
-            return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
-          })()}
-          stroke={token("card")}
-          strokeWidth="2"
-        />
-
-        <line
-          x1={GAUGE.cx}
-          y1={GAUGE.cy}
-          x2={needle.x}
-          y2={needle.y}
-          stroke={token("foreground")}
-          strokeWidth="3"
-          strokeLinecap="round"
-        />
-        <circle
-          cx={GAUGE.cx}
-          cy={GAUGE.cy}
-          r="6"
-          fill={token("foreground")}
-        />
-        <circle cx={GAUGE.cx} cy={GAUGE.cy} r="2.5" fill={token("card")} />
-      </svg>
-
-      <div className="-mt-2 text-center">
-        <div className="tabular text-3xl font-semibold text-foreground">
-          {shown}%
-        </div>
-        <div className="mt-0.5 text-2xs text-muted-foreground">{status}</div>
-      </div>
-
-      <div className="text-2xs text-muted-foreground">
-        Meta: 90% • Atual: <span className="tabular">{shown}%</span>
-      </div>
-    </div>
-  );
-};
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const data = mockKpis();
+  const codusu = user?.codusu != null && Number.isFinite(Number(user.codusu)) ? Number(user.codusu) : null;
+  const primeiroNome = (user?.name || "").trim().split(/\s+/)[0] || "";
 
-  const CODUSU_LOGADO = (user as any)?.codusu ?? 134;
+  const hoje = useMemo(() => new Date(), []);
+  const [ano, setAno] = useState(hoje.getFullYear());
+  const [mes, setMes] = useState(hoje.getMonth() + 1);
+  const [escopo, setEscopo] = useState<Escopo>(lerEscopo);
+  const [atualizacao, setAtualizacao] = useState(0);
+  const [atualizadoEm, setAtualizadoEm] = useState(() => new Date());
+  const [auditarOpe, setAuditarOpe] = useState(false);
 
-  // ================== FILTROS GLOBAIS (topo) ==================
-  const initial = useMemo(() => nowYearMonth(), []);
-  const [fAno, setFAno] = useState<string>(initial.year);
-  const [fMes, setFMes] = useState<string>(initial.month);
-
-  const [anoSel, setAnoSel] = useState<string>(initial.year);
-  const [mesSel, setMesSel] = useState<string>(initial.month);
-
-  const MMYYYY_LABEL = useMemo(() => monthYearLabel(mesSel, anoSel), [mesSel, anoSel]);
-  const MMYYYY_PAD = useMemo(() => `${pad2(Number(mesSel))}/${anoSel}`, [mesSel, anoSel]);
-
-  const aplicarFiltros = () => {
-    const y = String(fAno || "").trim();
-    const m = String(fMes || "").trim();
-
-    const yOk = /^\d{4}$/.test(y) ? y : String(new Date().getFullYear());
-    const mNum = Number(m);
-    const mOk =
-      Number.isFinite(mNum) && mNum >= 1 && mNum <= 12
-        ? String(mNum)
-        : String(new Date().getMonth() + 1);
-
-    setAnoSel(yOk);
-    setMesSel(mOk);
-
-    setFAno(yOk);
-    setFMes(mOk);
+  // Sem usuário identificado não há como recortar: vale a empresa toda.
+  const sup = escopo === "meus" && codusu != null ? codusu : null;
+  const trocarEscopo = (e: Escopo) => {
+    setEscopo(e);
+    gravarEscopo(e);
+  };
+  const atualizar = () => {
+    setAtualizacao((x) => x + 1);
+    setAtualizadoEm(new Date());
   };
 
-  const irParaHoje = () => {
-    const n = nowYearMonth();
-    setFAno(n.year);
-    setFMes(n.month);
-    setAnoSel(n.year);
-    setMesSel(n.month);
-  };
+  const mm = `${pad2(mes)}/${ano}`;
+  const anterior = new Date(ano, mes - 2, 1);
+  const mmAnt = `${pad2(anterior.getMonth() + 1)}/${anterior.getFullYear()}`;
+  const mesKey = `${ano}-${pad2(mes)}`;
+  const rotuloMes = `${MESES_LONGO[mes]} de ${ano}`;
+  const iniMes = `01/${pad2(mes)}/${ano}`;
+  const fimMesDate = new Date(ano, mes - 1, ultimoDia(mes, ano));
+  const fimMes = dataOracle(fimMesDate);
+  const mesFuturo = new Date(ano, mes - 1, 1) > hoje;
+  const ateHoje = dataOracle(fimMesDate < hoje ? fimMesDate : hoje);
 
-  // ================== ESTADOS ==================
-  const [avancoReal, setAvancoReal] = useState<number>(0);
-  const [avancoLoading, setAvancoLoading] = useState<boolean>(true);
-  const [avancoErro, setAvancoErro] = useState<string | null>(null);
+  const diaAnt = useMemo(() => diaUtilAnterior(hoje), [hoje]);
+  const hojeIso = isoLocal(hoje);
+  const diaAntIso = isoLocal(diaAnt);
 
-  const [barData, setBarData] = useState<BarColab[]>([]);
-  const [barLoading, setBarLoading] = useState(true);
-  const [barErro, setBarErro] = useState<string | null>(null);
+  /* ── Consultas ─────────────────────────────────────────────── */
+  const he = useConsulta(() => getResumoHoraExtra(mm, mmAnt, sup), [mm, mmAnt, sup, atualizacao]);
+  const assid = useConsulta(() => getAssiduidade(ano, mes, sup), [ano, mes, sup, atualizacao]);
+  const faltas = useConsulta(() => getFaltasRecentes(diaAntIso, sup), [diaAntIso, sup, atualizacao]);
+  const ops = useConsulta(() => getOpsAvanco(mesKey, mesKey, sup), [mesKey, sup, atualizacao]);
+  const materiais = useConsulta(() => getListaFaltas(ano, mes, sup), [ano, mes, sup, atualizacao]);
+  const retrab = useConsulta(() => getRetrabalho(mm, mmAnt, sup), [mm, mmAnt, sup, atualizacao]);
+  // Meta e OPE: visão da fábrica; não dependem do escopo.
+  const mno = useConsulta(
+    async () => {
+      const [mesRows, diaRows] = await Promise.all([getRealizadoSetorMes(iniMes, fimMes), getRealizadoDiaSetor(iniMes, fimMes)]);
+      return resumoMno(mesRows, diaRows, ano, mes);
+    },
+    [iniMes, fimMes, atualizacao]
+  );
+  const ope = useConsulta(
+    async () => {
+      if (mesFuturo) return null;
+      const { ativos, pontos } = await getOpeDados(iniMes, ateHoje);
+      return totaisOpe(agregar(ativos, pontos, () => true));
+    },
+    [iniMes, ateHoje, mesFuturo, atualizacao]
+  );
 
-  const [detOpen, setDetOpen] = useState(false);
-  const [detColab, setDetColab] = useState<{ codfunc: number; name: string } | null>(null);
-  const [detLoading, setDetLoading] = useState(false);
-  const [detErro, setDetErro] = useState<string | null>(null);
-  const [detRows, setDetRows] = useState<DetAtividade[]>([]);
+  /* ── Derivados ─────────────────────────────────────────────── */
+  const opsResumo = useMemo(() => {
+    const lista = ops.dados ?? [];
+    const baixo = lista.filter((o) => statusAvanco(pctAvanco(o.avancoPrev), pctAvanco(o.avancoReal)) === "Baixo avanço");
+    const media = (f: (o: (typeof lista)[number]) => number) => (lista.length ? lista.reduce((s, o) => s + f(o), 0) / lista.length : 0);
+    const piores = [...lista]
+      .sort((a, b) => pctAvanco(b.avancoPrev) - pctAvanco(b.avancoReal) - (pctAvanco(a.avancoPrev) - pctAvanco(a.avancoReal)))
+      .filter((o) => pctAvanco(o.avancoPrev) > pctAvanco(o.avancoReal))
+      .slice(0, 6);
+    return { total: lista.length, baixo: baixo.length, prev: media((o) => pctAvanco(o.avancoPrev)), real: media((o) => pctAvanco(o.avancoReal)), piores };
+  }, [ops.dados]);
 
-  const [faltQtd, setFaltQtd] = useState<number>(0);
-  const [faltLoading, setFaltLoading] = useState<boolean>(true);
-  const [faltErro, setFaltErro] = useState<string | null>(null);
-
-  const [faltOpen, setFaltOpen] = useState(false);
-  const [faltListLoading, setFaltListLoading] = useState(false);
-  const [faltListErro, setFaltListErro] = useState<string | null>(null);
-  const [faltRows, setFaltRows] = useState<FaltaItem[]>([]);
-
-  const [retrHH, setRetrHH] = useState<number>(0);
-  const [retrLoading, setRetrLoading] = useState<boolean>(true);
-  const [retrErro, setRetrErro] = useState<string | null>(null);
-
-  const [retrOpen, setRetrOpen] = useState(false);
-  const [retrListLoading, setRetrListLoading] = useState(false);
-  const [retrListErro, setRetrListErro] = useState<string | null>(null);
-  const [retrRows, setRetrRows] = useState<RetrabItem[]>([]);
-
-  const [assValue] = useState<number>(87); // mock por enquanto
-
-  const [seniorData, setSeniorData] = useState<SeniorCompareBar[]>([]);
-  const [seniorLoading, setSeniorLoading] = useState(true);
-  const [seniorErro, setSeniorErro] = useState<string | null>(null);
-
-  // ===== Modal: Colaboradores por nível =====
-  const [seniorNivelOpen, setSeniorNivelOpen] = useState(false);
-  const [seniorNivelSel, setSeniorNivelSel] = useState<"I" | "II" | "III" | null>(null);
-  const [seniorNivelLoading, setSeniorNivelLoading] = useState(false);
-  const [seniorNivelErro, setSeniorNivelErro] = useState<string | null>(null);
-  const [seniorNivelRows, setSeniorNivelRows] = useState<SeniorColab[]>([]);
-
-  const CODDEP_ALVO = 101040600;
-
-  // ================== Avanço: KPI REAL (ERP) ==================
-  useEffect(() => {
-    let cancel = false;
-
-    (async () => {
-      try {
-        setAvancoLoading(true);
-        setAvancoErro(null);
-
-        const CODUSU_SUP = Number(CODUSU_LOGADO);
-
-        const sql = `
-          SELECT ROUND(avg(TRUNC(AVG(T.AVANCO))),2) AS REAL
-          FROM (
-            SELECT DISTINCT
-              (SELECT DISTINCT MAX(DATA)
-                 FROM AD_APOAVANCO AVO
-                 JOIN AD_COMPONENTECRONO CRO2
-                   ON CRO2.SEQ = AVO.SEQ
-                  AND AVO.CODUSU = CRO2.CODUSU
-                  AND AVO.CODPRODSP = CRO2.CODPRODSP
-                WHERE AVO.SEQ = DET.SEQ
-                  AND AVO.CODUSU = USU.CODUSU
-                  AND RETRABALHO = 'S') AS DTRETRABALHO,
-              Snk_Dividir(
-                ONE_NUMEROSUPPROD_PREV_DATA(USU.CODUSU , DET.SEQ, sysdate),
-                ONE_NUMEROSUPPROD_PREV(USU.CODUSU , DET.SEQ)
-              ) * 100 AS PREVISTO,
-              nvl((LOT.CONTROLEPA) , 'Ordem não Lancada') AS BARCO,
-              GRU.NOMEGRUPO AS MACROSETOR,
-              USU.CODGRUPO AS SETOR,
-              USU.NOMEUSU,
-              DET.CODUSU,
-              CASE
-                WHEN Snk_Dividir(
-                  ONE_NUMEROSUPPROD_REA(USU.CODUSU , DET.SEQ),
-                  ONE_NUMEROSUPPROD_PREV(USU.CODUSU , DET.SEQ)
-                ) * 100 > 100 THEN 100
-                ELSE Snk_Dividir(
-                  ONE_NUMEROSUPPROD_REA(USU.CODUSU , DET.SEQ),
-                  ONE_NUMEROSUPPROD_PREV(USU.CODUSU , DET.SEQ)
-                ) * 100
-              END AS AVANCO,
-              DET.DTINICIOPREV,
-              DET.DTFIMPREV,
-              (SELECT MAX(DATA) FROM AD_APOAVANCO WHERE CODUSU = USU.CODUSU AND SEQ = DET.SEQ ) AS ULTAPO,
-              ONE_NUMEROSUPPROD_PREV(DET.CODUSU , DET.SEQ) as AvPrev,
-              ONE_NUMEROSUPPROD_REA(DET.CODUSU , DET.SEQ) as AvReal,
-              DET.SEQ,
-              PROC.IDIPROC,
-              CASE
-                WHEN PAI.AD_CODGRUPOPROD IN (020100,020200,020300,020400,021000) THEN 'NX 260-290'
-                WHEN PAI.AD_CODGRUPOPROD IN (020800,021400) THEN 'NX 340-350'
-                WHEN PAI.AD_CODGRUPOPROD IN (020500,020600) THEN 'NX 360-370'
-                WHEN PAI.AD_CODGRUPOPROD IN (020700,021300) THEN 'NX 410'
-                WHEN PAI.AD_CODGRUPOPROD IN (021200) THEN 'NX 440'
-                WHEN PAI.AD_CODGRUPOPROD IN (020900,021100) THEN 'NX 500'
-                ELSE GRU2.DESCRGRUPOPROD
-              END AS DESCRGRUPOPROD,
-              PRJ.CODPROJ,
-              PRJ.IDENTIFICACAO,
-              PAR.CODPARC,
-              PAR.NOMEPARC
-            FROM AD_CRONOGRAMA CRO
-            JOIN TGFGRU GRU2 ON GRU2.CODGRUPOPROD = CRO.CODGRUPOPROD
-            JOIN TPRIPROC PROC ON PROC.AD_CODPROJ = CRO.CODPROJ AND PROC.STATUSPROC <> 'C'
-            JOIN TPRIPA LOT ON LOT.IDIPROC = PROC.IDIPROC
-            JOIN AD_DETALCRONOGRAMA DET ON DET.SEQ = CRO.SEQ
-            JOIN TSIUSU USU ON USU.CODUSU = DET.CODUSU
-            JOIN TSIGRU GRU ON GRU.CODGRUPO = USU.CODGRUPO
-            JOIN TCSPRJ PRJ ON CRO.CODPROJ = PRJ.CODPROJ
-            JOIN TCSPRJ PAI ON PAI.CODPROJ = PRJ.CODPROJPAI
-            LEFT JOIN TGFCAB CAB ON PRJ.CODPROJ = CAB.CODPROJ AND CAB.TIPMOV ='P'
-            LEFT JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
-            WHERE CRO.ANO = '${anoSel}'
-              AND CRO.MES = '${mesSel}'
-              AND PAI.AD_CODSUPERVISOR = ${CODUSU_SUP}
-          ) T
-          GROUP BY T.IDIPROC , T.BARCO , T.SEQ , T.DESCRGRUPOPROD, T.CODPROJ, T.IDENTIFICACAO, T.CODPARC, T.NOMEPARC
-        `.trim();
-
-        const rows = await obterReg(sql);
-        if (cancel) return;
-
-        const real = Number(rows?.[0]?.REAL ?? 0);
-        setAvancoReal(Number.isFinite(real) ? real : 0);
-      } catch (e: any) {
-        console.error("[DashboardPage] Erro ao carregar avanço (REAL):", e);
-        if (!cancel) setAvancoErro(e?.message || "Falha ao carregar o avanço da linha.");
-      } finally {
-        if (!cancel) setAvancoLoading(false);
-      }
-    })();
-
-    return () => {
-      cancel = true;
+  const matResumo = useMemo(() => {
+    const barcos = agruparPorLinhaEBarco(materiais.dados ?? []).flatMap((g) => g.barcos).sort(porGravidade);
+    const semPedido = barcos.filter((b) => b.vermelho > 0);
+    return {
+      barcos,
+      itens: barcos.reduce((s, b) => s + b.itens, 0),
+      barcosSemPedido: semPedido.length,
+      itensSemPedido: semPedido.reduce((s, b) => s + b.vermelho, 0),
     };
-  }, [CODUSU_LOGADO, anoSel, mesSel]);
+  }, [materiais.dados]);
 
-  // ================== Detalhamento do colaborador (sem filtro de mês por enquanto) ==================
-  async function carregarDetalhe(codfunc: number, name: string) {
-    try {
-      setDetLoading(true);
-      setDetErro(null);
-      setDetRows([]);
+  const faltasGrupos = useMemo(() => {
+    const rows = faltas.dados ?? [];
+    return [
+      { rotulo: "Hoje", dia: hojeIso, faltas: rows.filter((f) => f.dia === hojeIso) },
+      { rotulo: "Último dia útil", dia: diaAntIso, faltas: rows.filter((f) => f.dia === diaAntIso) },
+    ];
+  }, [faltas.dados, hojeIso, diaAntIso]);
+  const pessoasHoje = new Set(faltasGrupos[0].faltas.map((f) => f.codfunc)).size;
+  const pessoasAnt = new Set(faltasGrupos[1].faltas.map((f) => f.codfunc)).size;
 
-      const sql = `
-        SELECT
-          PRO.DESCRPROD,
-          APO.DTEXECUCAO,
-          Snk_Dividir(APO.QTD, 60) AS HH
-        FROM AD_DETALCRONOGRAMAFUNC APO
-        JOIN TFPFUN FUN ON FUN.CODFUNC = APO.CODFUNC
-        JOIN TGFPRO PRO ON PRO.CODPROD = APO.CODPRODSP
-        --WHERE FUN.CODFUNC = ${Number(codfunc)}
-        ORDER BY APO.DTEXECUCAO DESC
-      `.trim();
-
-      const rows = await obterReg(sql);
-
-      const list: DetAtividade[] = (rows || []).map((r: any) => ({
-        descrprod: String(r.DESCRPROD ?? ""),
-        dtexecucao: String(r.DTEXECUCAO ?? ""),
-        hh: Number(r.HH ?? 0),
-      }));
-
-      setDetColab({ codfunc, name });
-      setDetRows(list);
-      setDetOpen(true);
-    } catch (e: any) {
-      console.error("[DashboardPage] Erro ao carregar detalhe do colaborador:", e);
-      setDetErro(e?.message || "Falha ao carregar o detalhamento do colaborador.");
-      setDetOpen(true);
-    } finally {
-      setDetLoading(false);
+  const retrabTop = useMemo(() => {
+    const m = new Map<string, { atividade: string; setor: string; hh: number }>();
+    for (const it of retrab.dados?.atual.itens ?? []) {
+      const k = `${it.setor}|${it.atividade}`;
+      const e = m.get(k) ?? { atividade: it.atividade, setor: it.setor, hh: 0 };
+      e.hh += it.hh;
+      m.set(k, e);
     }
-  }
+    return [...m.values()].sort((a, b) => b.hh - a.hh).slice(0, 5);
+  }, [retrab.dados]);
 
-  // ================== Materiais faltantes (count) ==================
-  useEffect(() => {
-    let cancel = false;
+  const farol = farolOpe(ope.dados?.opePct ?? null);
+  const tomOpe: Tone | undefined = farol === "ok" ? "success" : farol === "warn" || farol === "anomalia" ? "warning" : farol === "bad" ? "danger" : undefined;
+  const tomMeta: Tone | undefined =
+    mno.dados?.atingProjetado != null
+      ? mno.dados.atingProjetado >= 100 ? "success" : mno.dados.atingProjetado >= 90 ? "warning" : "danger"
+      : undefined;
 
-    (async () => {
-      try {
-        setFaltLoading(true);
-        setFaltErro(null);
+  const anos = Array.from(new Set([hoje.getFullYear() + 1, hoje.getFullYear(), hoje.getFullYear() - 1, ano])).sort((a, b) => b - a);
+  const semEscopo = sup == null;
+  const escopoTexto = semEscopo ? "empresa toda" : "sua equipe e seus barcos";
+  const selo = <Badge variant="muted" className="text-2xs">fábrica</Badge>;
 
-        const sql = `
-          SELECT COUNT(*) AS QTD
-          FROM CND_ONE_LISTA_FALTA F
-          JOIN TGFPRO PRO ON PRO.CODPROD = F.CODPROD
-          LEFT JOIN AD_LISTADEFALTAMOT MOT
-            ON MOT.CODPROD = F.CODPROD
-           AND MOT.MES = F.MES
-           AND MOT.CHASSI = F.NROLOTE
-          LEFT JOIN VW_NX_LISTAFALTA_DATAPREV DTP
-            ON DTP.CODPROD = F.CODPROD
-           AND DTP.NUNOTAFALT = F.NUNOTA
-           AND F.IDIPROC = DTP.IDIPROC
-          LEFT JOIN TGFPAR PAR
-            ON PAR.CODPARC = PRO.CODPARCFORN
-          LEFT JOIN TGFVEN VEN
-            ON VEN.CODVEND = PAR.CODVEND
-          LEFT JOIN TGFCAB CAB
-            ON CAB.NUNOTA = F.NUNOTA
-          LEFT JOIN TGFNAT NAT
-            ON NAT.CODNAT = CAB.CODNAT
-          LEFT JOIN AD_DETALCRONOGRAMA DET
-            ON DET.SEQ = F.SEQ
-           AND DET.CODUSU = NAT.AD_SETOR
-          LEFT JOIN TGFCAB C
-            ON C.NUNOTA = F.NUNOTA
-          LEFT JOIN TGFITE I
-            ON I.NUNOTA = F.NUNOTA
-           AND I.SEQUENCIA = F.SEQUENCIA
-          LEFT JOIN AD_CRONOGRAMA CRO
-            ON CRO.SEQ = F.SEQ
-          LEFT JOIN TCSPRJ PRJ
-            ON PRJ.CODPROJ = CRO.CODPROJ
-          LEFT JOIN TCSPRJ PAI
-            ON PAI.CODPROJ = PRJ.CODPROJPAI
-          LEFT JOIN TSIUSU USU
-            ON USU.CODUSU = PAI.AD_CODSUPERVISOR
-          WHERE
-            F.SALDO_FINAL < 0
-            AND F.ANO IN ('${anoSel}')
-            AND F.MES IN ('${String(Number(mesSel))}')
-            AND PAI.AD_CODSUPERVISOR = ${Number(CODUSU_LOGADO)}
-            AND NVL(PRO.CODCONFKIT, 0) = 0
-            AND NOT PRO.CODPROD IN (
-              21740,14044,328,19959,9587,21757,21756,14048,14045,18731,18210,
-              5725,10190,4772,10191,14047,4969,9588,18211,9589,2580,1414,
-              1954,5775,2680,3038,17775,9884,18174,19333,1593,1831,14102,19712
-            )
-        `.trim();
-
-        const rows = await obterReg(sql);
-        if (cancel) return;
-
-        const qtd = Number(rows?.[0]?.QTD ?? 0);
-        setFaltQtd(Number.isFinite(qtd) ? qtd : 0);
-      } catch (e: any) {
-        console.error("[DashboardPage] Erro ao carregar materiais faltantes (count):", e);
-        if (!cancel) setFaltErro(e?.message || "Falha ao carregar materiais faltantes.");
-      } finally {
-        if (!cancel) setFaltLoading(false);
-      }
-    })();
-
-    return () => {
-      cancel = true;
-    };
-  }, [CODUSU_LOGADO, anoSel, mesSel]);
-
-  // ================== Materiais faltantes: modal/lista ==================
-  async function abrirFaltantes() {
-    setFaltOpen(true);
-    if (faltRows.length > 0) return;
-
-    try {
-      setFaltListLoading(true);
-      setFaltListErro(null);
-      setFaltRows([]);
-
-      const sql = `
-        SELECT
-          F.NROLOTE AS CHASSI,
-          PRO.CODPROD AS CODPROD,
-          PRO.DESCRPROD AS DESCRPROD,
-          F.NECESSIDADE AS NECESSIDADE,
-          DTP.DATA_ENTREGA AS DATA_ENTREGA
-        FROM CND_ONE_LISTA_FALTA F
-        JOIN TGFPRO PRO ON PRO.CODPROD = F.CODPROD
-        LEFT JOIN AD_LISTADEFALTAMOT MOT
-          ON MOT.CODPROD = F.CODPROD
-         AND MOT.MES = F.MES
-         AND MOT.CHASSI = F.NROLOTE
-        LEFT JOIN VW_NX_LISTAFALTA_DATAPREV DTP
-          ON DTP.CODPROD = F.CODPROD
-         AND DTP.NUNOTAFALT = F.NUNOTA
-         AND F.IDIPROC = DTP.IDIPROC
-        LEFT JOIN TGFPAR PAR
-          ON PAR.CODPARC = PRO.CODPARCFORN
-        LEFT JOIN TGFVEN VEN
-          ON VEN.CODVEND = PAR.CODVEND
-        LEFT JOIN TGFCAB CAB
-          ON CAB.NUNOTA = F.NUNOTA
-        LEFT JOIN TGFNAT NAT
-          ON NAT.CODNAT = CAB.CODNAT
-        LEFT JOIN AD_DETALCRONOGRAMA DET
-          ON DET.SEQ = F.SEQ
-         AND DET.CODUSU = NAT.AD_SETOR
-        LEFT JOIN TGFCAB C
-          ON C.NUNOTA = F.NUNOTA
-        LEFT JOIN TGFITE I
-          ON I.NUNOTA = F.NUNOTA
-         AND I.SEQUENCIA = F.SEQUENCIA
-        LEFT JOIN AD_CRONOGRAMA CRO
-          ON CRO.SEQ = F.SEQ
-        LEFT JOIN TCSPRJ PRJ
-          ON PRJ.CODPROJ = CRO.CODPROJ
-        LEFT JOIN TCSPRJ PAI
-          ON PAI.CODPROJ = PRJ.CODPROJPAI
-        LEFT JOIN TSIUSU USU
-          ON USU.CODUSU = PAI.AD_CODSUPERVISOR
-        WHERE
-          F.SALDO_FINAL < 0
-          AND F.ANO IN ('${anoSel}')
-          AND F.MES IN ('${String(Number(mesSel))}')
-          AND PAI.AD_CODSUPERVISOR = ${Number(CODUSU_LOGADO)}
-          AND NVL(PRO.CODCONFKIT, 0) = 0
-          AND NOT PRO.CODPROD IN (
-            21740,14044,328,19959,9587,21757,21756,14048,14045,18731,18210,
-            5725,10190,4772,10191,14047,4969,9588,18211,9589,2580,1414,
-            1954,5775,2680,3038,17775,9884,18174,19333,1593,1831,14102,19712
-          )
-        ORDER BY 1
-      `.trim();
-
-      const rows = await obterReg(sql);
-
-      const list: FaltaItem[] = (rows || []).map((r: any) => ({
-        chassi: String(r.CHASSI ?? ""),
-        codprod: Number(r.CODPROD ?? 0),
-        descrprod: String(r.DESCRPROD ?? ""),
-        necessidade: String(r.NECESSIDADE ?? ""),
-        dataEntrega: String(r.DATA_ENTREGA ?? ""),
-      }));
-
-      setFaltRows(list);
-    } catch (e: any) {
-      console.error("[DashboardPage] Erro ao carregar lista de faltantes:", e);
-      setFaltListErro(e?.message || "Falha ao carregar a lista de materiais faltantes.");
-    } finally {
-      setFaltListLoading(false);
-    }
-  }
-
-  // ================== Retrabalho: total (mês/ano selecionado) ==================
-  useEffect(() => {
-    let cancel = false;
-
-    (async () => {
-      try {
-        setRetrLoading(true);
-        setRetrErro(null);
-
-        const sql = `
-          SELECT SUM(APO.QTD) / 60 AS QTD
-          FROM AD_CRONOGRAMA CRO
-          JOIN AD_COMPONENTECRONO APO ON CRO.SEQ = APO.SEQ 
-          JOIN TCSPRJ PRJ ON PRJ.CODPROJ = CRO.CODPROJ 
-          JOIN TCSPRJ PAI ON PAI.CODPROJ = PRJ.CODPROJPAI
-          JOIN AD_APOAVANCO AV 
-            ON AV.SEQ = APO.SEQ 
-           AND AV.CODUSU = APO.CODUSU 
-           AND AV.CODPRODSP = APO.CODPRODSP
-          WHERE PAI.AD_CODSUPERVISOR = ${Number(CODUSU_LOGADO)}
-            AND APO.FEITO = 'S'
-            AND APO.RETRABALHO = 'S'
-            AND TO_CHAR(AV.DATA , 'MM/YYYY') = '${MMYYYY_PAD}'
-        `.trim();
-
-        const rows = await obterReg(sql);
-        if (cancel) return;
-
-        const hh = Number(rows?.[0]?.QTD ?? 0);
-        setRetrHH(Number.isFinite(hh) ? hh : 0);
-      } catch (e: any) {
-        console.error("[DashboardPage] Erro ao carregar retrabalho (total):", e);
-        if (!cancel) setRetrErro(e?.message || "Falha ao carregar o retrabalho total.");
-      } finally {
-        if (!cancel) setRetrLoading(false);
-      }
-    })();
-
-    return () => {
-      cancel = true;
-    };
-  }, [CODUSU_LOGADO, MMYYYY_PAD]);
-
-  async function abrirRetrabalho() {
-    setRetrOpen(true);
-    if (retrRows.length > 0) return;
-
-    try {
-      setRetrListLoading(true);
-      setRetrListErro(null);
-      setRetrRows([]);
-
-      const sql = `
-        SELECT 
-          USU.NOMEUSU AS SETOR,
-          PRO.DESCRPROD AS ATIVIDADE,
-          Snk_Dividir(APO.QTD, 60) AS HH
-        FROM AD_CRONOGRAMA CRO
-        JOIN AD_COMPONENTECRONO APO ON CRO.SEQ = APO.SEQ 
-        JOIN TCSPRJ PRJ ON PRJ.CODPROJ = CRO.CODPROJ 
-        JOIN TCSPRJ PAI ON PAI.CODPROJ = PRJ.CODPROJPAI
-        JOIN AD_APOAVANCO AV 
-          ON AV.SEQ = APO.SEQ 
-         AND AV.CODUSU = APO.CODUSU 
-         AND AV.CODPRODSP = APO.CODPRODSP
-        JOIN TGFPRO PRO ON PRO.CODPROD = APO.CODPRODSP
-        JOIN TSIUSU USU ON USU.CODUSU = APO.CODUSU 
-        WHERE PAI.AD_CODSUPERVISOR = ${Number(CODUSU_LOGADO)}
-          AND APO.FEITO = 'S'
-          AND APO.RETRABALHO = 'S'
-          AND TO_CHAR(AV.DATA , 'MM/YYYY') = '${MMYYYY_PAD}'
-        ORDER BY 1
-      `.trim();
-
-      const rows = await obterReg(sql);
-
-      const list: RetrabItem[] = (rows || []).map((r: any) => ({
-        setor: String(r.SETOR ?? ""),
-        atividade: String(r.ATIVIDADE ?? ""),
-        hh: Number(r.HH ?? 0),
-      }));
-
-      setRetrRows(list);
-    } catch (e: any) {
-      console.error("[DashboardPage] Erro ao carregar detalhamento de retrabalho:", e);
-      setRetrListErro(e?.message || "Falha ao carregar o detalhamento do retrabalho.");
-    } finally {
-      setRetrListLoading(false);
-    }
-  }
-
-  // ================== Atividades por colaborador (sem filtro de mês por enquanto) ==================
-  useEffect(() => {
-    let cancel = false;
-
-    (async () => {
-      try {
-        setBarLoading(true);
-        setBarErro(null);
-
-        const CODUSU_SUP = CODUSU_LOGADO;
-
-        const sql = `
-          SELECT 
-            FUN.CODFUNC,
-            FUN.NOMEFUNC,
-            SUM(APO.QTD) AS QTD
-          FROM AD_DETALCRONOGRAMAFUNC APO
-          JOIN TFPFUN FUN ON FUN.CODFUNC = APO.CODFUNC
-          WHERE FUN.USUVPJSUP = ${Number(CODUSU_SUP)}
-          GROUP BY FUN.CODFUNC, FUN.NOMEFUNC
-        `.trim();
-
-        const rows = await obterReg(sql);
-        if (cancel) return;
-
-        const list: BarColab[] = (rows || [])
-          .map((r: any) => {
-            const qtdMin = Number(r.QTD ?? 0);
-            const hh = Math.round((qtdMin / 60) * 10) / 10;
-            return { codfunc: Number(r.CODFUNC ?? 0), name: String(r.NOMEFUNC ?? ""), hh };
-          })
-          .filter((x) => x.codfunc > 0)
-          .sort((a, b) => b.hh - a.hh);
-
-        setBarData(list);
-      } catch (e: any) {
-        console.error("[DashboardPage] Erro ao carregar gráfico de atividades:", e);
-        if (!cancel)
-          setBarErro(e?.message || "Falha ao carregar a representatividade por colaborador.");
-      } finally {
-        if (!cancel) setBarLoading(false);
-      }
-    })();
-
-    return () => {
-      cancel = true;
-    };
-  }, [CODUSU_LOGADO]);
-
-  // ================== Pirâmide de senioridade (sem filtro de mês por enquanto) ==================
-  useEffect(() => {
-    let cancel = false;
-
-    (async () => {
-      try {
-        setSeniorLoading(true);
-        setSeniorErro(null);
-
-        const CODUSU_SUP = CODUSU_LOGADO;
-
-        const sql = `
-          SELECT 
-            SUM(QTD) AS QTD, 
-            NIVEL , 
-            SUM(NIVELI) AS I , 
-            SUM(NIVELII) AS II,
-            SUM(AD_NIVELIII) AS III
-          FROM (
-            SELECT 
-              COUNT(*) AS QTD,
-              CAR.AD_NIVEL AS NIVEL,
-              DEP.AD_NIVELI AS NIVELI,
-              DEP.AD_NIVELII AS NIVELII,
-              DEP.AD_NIVELIII
-            FROM TFPFUN FUN 
-            JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
-            JOIN TFPDEP DEP ON DEP.CODDEP = FUN.CODDEP
-            WHERE FUN.USUVPJSUP = ${Number(CODUSU_SUP)}
-              AND FUN.SITUACAO = '1'
-            GROUP BY CAR.AD_NIVEL, DEP.AD_NIVELI, DEP.AD_NIVELII, DEP.AD_NIVELIII
-          )
-          GROUP BY NIVEL
-          ORDER BY 2 ASC
-        `.trim();
-
-        const rows = await obterReg(sql);
-        if (cancel) return;
-
-        const planned = {
-          I: rows?.length ? Number(rows[0]?.I ?? 0) : 0,
-          II: rows?.length ? Number(rows[0]?.II ?? 0) : 0,
-          III: rows?.length ? Number(rows[0]?.III ?? 0) : 0,
-        };
-
-        const atualMap: Record<"I" | "II" | "III", number> = { I: 0, II: 0, III: 0 };
-        for (const r of rows || []) {
-          const n = normalizeNivel(r?.NIVEL);
-          if (!n) continue;
-          atualMap[n] += Number(r?.QTD ?? 0);
-        }
-
-        const order: ("III" | "II" | "I")[] = ["III", "II", "I"];
-
-        const list: SeniorCompareBar[] = order.map((n) => {
-          const atual = atualMap[n];
-          const previsto = planned[n];
-          const diff = atual - previsto;
-          const pct = previsto > 0 ? atual / previsto : null;
-          return { nivel: n, label: nivelLabel(n), atual, previsto, diff, pct };
-        });
-
-        setSeniorData(list);
-      } catch (e: any) {
-        console.error("[DashboardPage] Erro ao carregar pirâmide comparativa:", e);
-        if (!cancel)
-          setSeniorErro(
-            e?.message || "Falha ao carregar a pirâmide de senioridade (comparativo)."
-          );
-      } finally {
-        if (!cancel) setSeniorLoading(false);
-      }
-    })();
-
-    return () => {
-      cancel = true;
-    };
-  }, [CODUSU_LOGADO]);
-
-  // ================== Colaboradores por nível (clique na pirâmide) ==================
-  async function abrirColaboradoresNivel(nivel: "I" | "II" | "III") {
-    setSeniorNivelOpen(true);
-    setSeniorNivelSel(nivel);
-
-    // se já tiver carregado esse nível e quiser evitar nova consulta:
-    // if (seniorNivelRows.length > 0 && seniorNivelSel === nivel) return;
-
-    try {
-      setSeniorNivelLoading(true);
-      setSeniorNivelErro(null);
-      setSeniorNivelRows([]);
-
-      const CODUSU_SUP = Number(CODUSU_LOGADO);
-
-      const sql = `
-        SELECT 
-          FUN.CODFUNC,
-          FUN.NOMEFUNC,
-          CAR.AD_NIVEL
-        FROM TFPFUN FUN
-        JOIN TFPCAR CAR ON CAR.CODCARGO = FUN.CODCARGO
-        JOIN TFPDEP DEP ON DEP.CODDEP = FUN.CODDEP
-        WHERE FUN.USUVPJSUP = ${Number(CODUSU_SUP)}
-          AND FUN.SITUACAO = '1'
-          AND CAR.AD_NIVEL = '${nivel}'
-        ORDER BY FUN.NOMEFUNC
-      `.trim();
-
-      const rows = await obterReg(sql);
-
-      const list: SeniorColab[] = (rows || []).map((r: any) => ({
-        codfunc: Number(r.CODFUNC ?? 0),
-        nomefunc: String(r.NOMEFUNC ?? ""),
-        nivel: (normalizeNivel(r?.AD_NIVEL) || nivel) as "I" | "II" | "III",
-      }));
-
-      setSeniorNivelRows(list);
-    } catch (e: any) {
-      console.error("[DashboardPage] Erro ao carregar colaboradores por nível:", e);
-      setSeniorNivelErro(e?.message || "Falha ao carregar os colaboradores do nível selecionado.");
-    } finally {
-      setSeniorNivelLoading(false);
-    }
-  }
-
-  // ================== Derived ==================
-  const seniorResumo = useMemo(() => {
-    const totalAtual = seniorData.reduce((acc, x) => acc + (x.atual || 0), 0);
-    const totalPrev = seniorData.reduce((acc, x) => acc + (x.previsto || 0), 0);
-    const diff = totalAtual - totalPrev;
-    const pct = totalPrev > 0 ? totalAtual / totalPrev : null;
-    return { totalAtual, totalPrev, diff, pct };
-  }, [seniorData]);
-
-  const totalDetHH = useMemo(() => {
-    return Math.round(detRows.reduce((acc, x) => acc + (Number(x.hh) || 0), 0) * 10) / 10;
-  }, [detRows]);
-
-  // Os KPIs sinalizam carregamento com <Skeleton> (prop `loading` do StatCard),
-  // não mais com a string "…", que era indistinguível de um dado real.
-  const faltantesValue = useMemo(() => {
-    if (faltErro) return "—";
-    return String(faltQtd ?? 0);
-  }, [faltErro, faltQtd]);
-
-  const retrValue = useMemo(() => {
-    if (retrErro) return "—";
-    return `${Math.round((Number(retrHH) || 0) * 10) / 10}`;
-  }, [retrErro, retrHH]);
-
-  const retrTotalModal = useMemo(() => {
-    return Math.round(retrRows.reduce((acc, r) => acc + (Number(r.hh) || 0), 0) * 10) / 10;
-  }, [retrRows]);
-
-  const avancoValue = useMemo(() => {
-    if (avancoErro) return "—";
-    return `${Math.round((Number(avancoReal) || 0) * 10) / 10}%`;
-  }, [avancoErro, avancoReal]);
-
-  // força recarregar listas nos modais quando mudar filtro (opcional)
-  useEffect(() => {
-    setFaltRows([]);
-    setRetrRows([]);
-  }, [anoSel, mesSel]);
+  const hePend = he.dados?.atual;
+  const assidAtual = assid.dados?.atual;
+  const assidAnt = assid.dados?.anterior;
 
   return (
-    // O scroll é do AppShell; a página só empilha seu conteúdo.
     <div className="space-y-6">
       <PageHeader
-        title="Visão geral"
-        description={`Indicadores de operação • ${MMYYYY_LABEL}`}
+        title={primeiroNome ? `Olá, ${primeiroNome.charAt(0).toUpperCase()}${primeiroNome.slice(1).toLowerCase()}` : "Visão geral"}
+        description={`${DIAS_SEMANA[hoje.getDay()]}, ${toBR(hojeIso)} · indicadores de ${rotuloMes} · ${escopoTexto}`}
         actions={
           <>
-            <Button variant="outline" onClick={irParaHoje}>
-              <RefreshCw className="h-4 w-4" />
-              Hoje
-            </Button>
-            <Button onClick={aplicarFiltros}>
-              <Gauge className="h-4 w-4" />
-              Aplicar
+            {codusu != null && (
+              <div className="flex items-center gap-1.5" role="group" aria-label="Escopo dos dados">
+                <Chip ativo={escopo === "meus"} onClick={() => trocarEscopo("meus")}>Meus</Chip>
+                <Chip ativo={escopo === "todos"} onClick={() => trocarEscopo("todos")}>Todos</Chip>
+              </div>
+            )}
+            <div className="w-36">
+              <Select value={mes} onChange={(e) => setMes(Number(e.target.value))} aria-label="Mês">
+                {MESES_LONGO.slice(1).map((nome, i) => (
+                  <option key={i + 1} value={i + 1}>{nome}</option>
+                ))}
+              </Select>
+            </div>
+            <div className="w-24">
+              <Select value={ano} onChange={(e) => setAno(Number(e.target.value))} aria-label="Ano">
+                {anos.map((a) => <option key={a} value={a}>{a}</option>)}
+              </Select>
+            </div>
+            <Button variant="outline" size="sm" onClick={atualizar} title={`Atualizado às ${atualizadoEm.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`}>
+              <RefreshCw className="h-4 w-4" /> Atualizar
             </Button>
           </>
         }
-      >
-        <Field label="Mês" className="w-32">
-          {(p) => (
-            <Select
-              {...p}
-              value={fMes}
-              onChange={(e) => setFMes(e.target.value)}
-            >
-              {Array.from({ length: 12 }).map((_, i) => (
-                <option key={i + 1} value={String(i + 1)}>
-                  {pad2(i + 1)}
-                </option>
-              ))}
-            </Select>
-          )}
-        </Field>
+      />
 
-        <Field label="Ano" className="w-28">
-          {(p) => (
-            <Input
-              {...p}
-              inputMode="numeric"
-              value={fAno}
-              onChange={(e) => setFAno(e.target.value)}
-              placeholder="2026"
-            />
-          )}
-        </Field>
+      {/* Precisa de ação */}
+      <section aria-labelledby="titulo-acao" className="space-y-3">
+        <h3 id="titulo-acao" className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Precisa de ação</h3>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <AcaoCard
+            icon={Timer}
+            titulo="Hora extra aguardando aprovação"
+            valor={`${num(hePend?.pendentesQtd ?? 0)} ${hePend?.pendentesQtd === 1 ? "lançamento" : "lançamentos"}`}
+            detalhe={`${h1(horas(hePend?.pendentesMin ?? 0))} em ${rotuloMes}`}
+            tom="warning"
+            emDia={!!hePend && hePend.pendentesQtd === 0}
+            para="/hora-extra"
+            rotuloLink="Aprovar horas"
+            loading={he.loading}
+            erro={he.erro}
+          />
+          <AcaoCard
+            icon={UserX}
+            titulo="Faltas de hoje"
+            valor={`${num(pessoasHoje)} ${pessoasHoje === 1 ? "pessoa" : "pessoas"}`}
+            detalhe={`${num(pessoasAnt)} no último dia útil (${toBR(diaAntIso).slice(0, 5)})`}
+            tom="danger"
+            emDia={!faltas.loading && !faltas.erro && pessoasHoje === 0 && pessoasAnt === 0}
+            para="/absenteismo"
+            rotuloLink="Ver absenteísmo"
+            loading={faltas.loading}
+            erro={faltas.erro}
+          />
+          <AcaoCard
+            icon={PackageX}
+            titulo="Barcos com item sem pedido"
+            valor={`${num(matResumo.barcosSemPedido)} ${matResumo.barcosSemPedido === 1 ? "barco" : "barcos"}`}
+            detalhe={`${num(matResumo.itensSemPedido)} itens sem ordem de compra · ${num(matResumo.itens)} faltas no mês`}
+            tom="danger"
+            emDia={!materiais.loading && !materiais.erro && matResumo.barcosSemPedido === 0}
+            para="/lista-faltas"
+            rotuloLink="Abrir lista de faltas"
+            loading={materiais.loading}
+            erro={materiais.erro}
+          />
+          <AcaoCard
+            icon={AlarmClock}
+            titulo="OPs abaixo do previsto"
+            valor={`${num(opsResumo.baixo)} ${opsResumo.baixo === 1 ? "OP" : "OPs"}`}
+            detalhe={`de ${num(opsResumo.total)} no cronograma de ${MESES_LONGO[mes].toLowerCase()} · mais de 10 pp atrás`}
+            tom="warning"
+            emDia={!ops.loading && !ops.erro && opsResumo.baixo === 0}
+            para="/atividades"
+            rotuloLink="Ver atividades"
+            loading={ops.loading}
+            erro={ops.erro}
+          />
+        </div>
+      </section>
 
-        <p className="ml-auto max-w-sm text-2xs text-muted-foreground">
-          Avanço, faltantes e retrabalho respeitam o mês/ano selecionados.
-          Atividades e senioridade ainda são gerais.
-        </p>
-      </PageHeader>
+      {/* Indicadores do mês */}
+      <section aria-labelledby="titulo-mes" className="space-y-3">
+        <h3 id="titulo-mes" className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Indicadores de {rotuloMes}</h3>
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 2xl:grid-cols-6">
+          <StatCard
+            icon={CalendarCheck}
+            label="Assiduidade"
+            value={assidAtual?.assiduidade != null ? `${num(assidAtual.assiduidade, 1)}%` : "—"}
+            detail={assidAtual ? `${num(assidAtual.faltas)} faltas · ${h1(assidAtual.hhPerdido)} perdidas` : undefined}
+            delta={assidAtual?.assiduidade != null ? delta(assidAtual.assiduidade, assidAnt?.assiduidade, " pp") : undefined}
+            deltaTone={assidAtual?.assiduidade != null && assidAnt?.assiduidade != null && assidAtual.assiduidade < assidAnt.assiduidade ? "danger" : "success"}
+            loading={assid.loading}
+          />
+          <StatCard
+            icon={Timer}
+            label="Hora extra aprovada"
+            value={hePend ? h1(horas(hePend.aprovadosMin)) : "—"}
+            detail={hePend ? `${h1(horas(hePend.pendentesMin))} pendentes · ${num(hePend.colaboradores)} colaboradores` : he.erro ? "não foi possível carregar" : undefined}
+            delta={hePend ? delta(horas(hePend.aprovadosMin), he.dados ? horas(he.dados.anterior.aprovadosMin) : null, " h") : undefined}
+            deltaTone={hePend && he.dados && hePend.aprovadosMin > he.dados.anterior.aprovadosMin ? "warning" : "success"}
+            loading={he.loading}
+          />
+          <StatCard
+            icon={Gauge}
+            label="Avanço das OPs"
+            value={opsResumo.total ? `${num(opsResumo.real)}%` : "—"}
+            detail={opsResumo.total ? `previsto ${num(opsResumo.prev)}% · média de ${num(opsResumo.total)} OPs` : ops.erro ? "não foi possível carregar" : "sem OPs no cronograma"}
+            tone={opsResumo.total && opsResumo.real < opsResumo.prev - 10 ? "danger" : undefined}
+            loading={ops.loading}
+          />
+          <StatCard
+            icon={Wrench}
+            label="Retrabalho"
+            value={retrab.dados ? h1(retrab.dados.atual.hh) : "—"}
+            detail={retrab.dados ? `${num(retrab.dados.atual.itens.length)} apontamentos` : retrab.erro ? "não foi possível carregar" : undefined}
+            delta={retrab.dados ? delta(retrab.dados.atual.hh, retrab.dados.anterior.hh, " h") : undefined}
+            deltaTone={retrab.dados && retrab.dados.atual.hh > retrab.dados.anterior.hh ? "danger" : "success"}
+            loading={retrab.loading}
+          />
+          <StatCard
+            icon={Target}
+            label="Meta de produção"
+            value={mno.dados?.atingimento != null ? `${num(mno.dados.atingimento)}%` : "—"}
+            detail={
+              <span className="flex flex-wrap items-center gap-1">
+                {selo}
+                {mno.dados?.atingProjetado != null ? `projeção ${num(mno.dados.atingProjetado)}%` : mno.erro ? "não foi possível carregar" : "sem projeção"}
+              </span>
+            }
+            tone={tomMeta}
+            loading={mno.loading}
+          />
+          <StatCard
+            icon={Factory}
+            label="OPE"
+            value={ope.dados?.opePct != null ? `${num(ope.dados.opePct)}%` : "—"}
+            detail={
+              <span className="flex flex-wrap items-center gap-1">
+                {selo}
+                {mesFuturo
+                  ? "mês ainda não começou"
+                  : ope.erro
+                  ? "não foi possível carregar"
+                  : ope.dados?.opePct == null
+                  ? "sem ponto registrado"
+                  : `${h1(ope.dados.ativ)} de ${h1(ope.dados.ponto)} · clique para auditar`}
+              </span>
+            }
+            tone={tomOpe}
+            loading={ope.loading}
+            onClick={ope.dados?.opePct != null ? () => setAuditarOpe(true) : undefined}
+          />
+        </div>
+      </section>
 
-      {/* Linha de KPIs */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          icon={Clock3}
-          label="HE disponível × consumida"
-          value={`${data.he.cons} / ${data.he.disp} h`}
-          detail={
-            <Badge variant="warning" className="text-2xs">
-              simulado
-            </Badge>
-          }
-        />
+      {/* Detalhes */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <BlocoDashboard
+          titulo="OPs mais atrasadas"
+          subtitulo={`Real × previsto no cronograma de ${MESES_LONGO[mes].toLowerCase()} · clique para alocar`}
+          para="/atividades"
+          loading={ops.loading}
+          erro={ops.erro}
+          onRetry={ops.recarregar}
+          vazio={opsResumo.piores.length === 0}
+          vazioTitulo={opsResumo.total ? "Nenhuma OP atrás do previsto" : "Nenhuma OP no cronograma do mês"}
+          vazioDescricao={!opsResumo.total && !semEscopo ? "Só aparecem barcos em que você é o supervisor do projeto (AD_CODSUPERVISOR)." : undefined}
+          vazioIcone={ClipboardList}
+        >
+          <OpsAtrasadas ops={opsResumo.piores} />
+        </BlocoDashboard>
 
-        <StatCard
-          icon={Gauge}
-          label="Avanço da linha"
-          value={avancoValue}
-          detail={MMYYYY_LABEL}
-          loading={avancoLoading}
-        />
+        <BlocoDashboard
+          titulo="Faltas de material por barco"
+          subtitulo={`Mesma regra da Lista de Faltas · ${num(matResumo.barcos.length)} barcos com falta`}
+          para="/lista-faltas"
+          loading={materiais.loading}
+          erro={materiais.erro}
+          onRetry={materiais.recarregar}
+          vazio={matResumo.barcos.length === 0}
+          vazioTitulo="Nenhuma falta de material no mês"
+          vazioIcone={PackageX}
+        >
+          <FaltasPorBarco barcos={matResumo.barcos.slice(0, 6)} />
+        </BlocoDashboard>
 
-        <StatCard
-          icon={Factory}
-          label="Materiais faltantes"
-          value={faltantesValue}
-          detail={MMYYYY_LABEL}
-          loading={faltLoading}
-          onClick={() => abrirFaltantes()}
-        />
+        <BlocoDashboard
+          titulo="Faltas da equipe"
+          subtitulo="Registradas em AD_VFALTA"
+          para="/absenteismo"
+          rotuloLink="Absenteísmo"
+          loading={faltas.loading}
+          erro={faltas.erro}
+          onRetry={faltas.recarregar}
+          vazio={false}
+          vazioTitulo=""
+        >
+          <EquipeFaltas grupos={faltasGrupos} />
+        </BlocoDashboard>
 
-        <StatCard
-          icon={Award}
-          label="Retrabalho (HH)"
-          value={retrValue}
-          detail={MMYYYY_LABEL}
-          loading={retrLoading}
-          onClick={() => abrirRetrabalho()}
-        />
+        <BlocoDashboard
+          titulo="Onde houve retrabalho"
+          subtitulo={retrab.dados ? `${h1(retrab.dados.atual.hh)} em ${rotuloMes}` : undefined}
+          para="/ope"
+          rotuloLink="Ver OPE"
+          loading={retrab.loading}
+          erro={retrab.erro}
+          onRetry={retrab.recarregar}
+          vazio={retrabTop.length === 0}
+          vazioTitulo="Nenhum retrabalho apontado no mês"
+          vazioIcone={Award}
+        >
+          <RetrabalhoTop itens={retrabTop} total={retrab.dados?.atual.hh ?? 0} />
+        </BlocoDashboard>
       </div>
 
-      {/* Gráfico de atividades realizadas por colaborador */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle>Atividades realizadas por colaborador</CardTitle>
-          <p className="text-2xs text-muted-foreground">
-            Horas apontadas no ERP • clique numa barra para ver o detalhamento
-          </p>
-        </CardHeader>
-        <CardContent className="h-[280px] pt-4">
-          <AsyncBoundary
-            loading={barLoading}
-            error={barErro}
-            isEmpty={barData.length === 0}
-            emptyTitle="Nenhum apontamento encontrado"
-            emptyDescription="Não há horas apontadas para este supervisor no período."
-            emptyIcon={Users}
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={barData}
-                margin={{ left: 12, right: 12, top: 8, bottom: 24 }}
-                style={{ cursor: "pointer" }}
-              >
-                <CartesianGrid {...gridProps} />
-                <XAxis
-                  {...axisProps}
-                  dataKey="name"
-                  angle={-20}
-                  textAnchor="end"
-                  height={50}
-                />
-                <YAxis
-                  {...axisProps}
-                  tickFormatter={(v) => `${v}h`}
-                  width={40}
-                />
-                <Tooltip
-                  {...tooltipProps}
-                  formatter={(value: any) => [`${value} h`, "Horas apontadas"]}
-                  labelFormatter={(label) => `Colaborador: ${label}`}
-                />
-                <Bar
-                  dataKey="hh"
-                  fill={seriesColor(0)}
-                  radius={[6, 6, 0, 0]}
-                  onClick={(data: any) => {
-                    const row: BarColab | undefined = data?.payload;
-                    if (!row?.codfunc) return;
-                    carregarDetalhe(row.codfunc, row.name);
-                  }}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </AsyncBoundary>
-        </CardContent>
-      </Card>
-
-      {/* Cards auxiliares */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle>Assiduidade</CardTitle>
-            <p className="text-2xs text-muted-foreground">
-              <Badge variant="warning" className="text-2xs">
-                simulado
-              </Badge>
-            </p>
-          </CardHeader>
-          <CardContent className="h-72">
-            <SpeedometerGauge
-              value={assValue}
-              max={100}
-              title="Índice de assiduidade"
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="gap-3 pb-2">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <CardTitle>Senioridade — real × previsto</CardTitle>
-                <p className="mt-1 text-2xs text-muted-foreground">
-                  Dep. {CODDEP_ALVO} • Supervisor {CODUSU_LOGADO} • clique num
-                  nível para ver os colaboradores
-                </p>
-              </div>
-
-              <Badge
-                variant={seniorResumo.diff >= 0 ? "success" : "destructive"}
-                className="whitespace-nowrap"
-              >
-                {seniorResumo.diff >= 0 ? "Excedente" : "Faltam"}{" "}
-                {fmtInt(Math.abs(seniorResumo.diff))} • {fmtPct(seniorResumo.pct)}
-              </Badge>
-            </div>
-          </CardHeader>
-
-          <CardContent className="h-[220px] pt-2">
-            <AsyncBoundary
-              loading={seniorLoading}
-              error={seniorErro}
-              isEmpty={seniorData.length === 0}
-              emptyTitle="Nenhum colaborador ativo"
-              emptyDescription="Não há colaboradores para o filtro atual."
-              emptyIcon={Users}
-            >
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={seniorData}
-                  layout="vertical"
-                  margin={{ top: 8, bottom: 8, left: 12, right: 12 }}
-                  barCategoryGap={10}
-                >
-                  <CartesianGrid {...gridProps} vertical horizontal={false} />
-                  <XAxis {...axisProps} type="number" allowDecimals={false} />
-                  <YAxis
-                    {...axisProps}
-                    type="category"
-                    dataKey="label"
-                    width={80}
-                  />
-                  <Legend {...legendProps} />
-                  <Tooltip
-                    {...tooltipProps}
-                    formatter={(value: any, name: any, ctx: any) => {
-                      const nivel = ctx?.payload?.nivel as
-                        | "I"
-                        | "II"
-                        | "III"
-                        | undefined;
-                      const nLabel = nivel ? nivelLabel(nivel) : "";
-                      if (name === "previsto")
-                        return [value, `Previsto • ${nLabel}`];
-                      if (name === "atual") return [value, `Atual • ${nLabel}`];
-                      return [value, name];
-                    }}
-                    labelFormatter={(label) => `Nível: ${label}`}
-                  />
-
-                  {/* Clique em qualquer barra abre o modal do nível. */}
-                  <Bar
-                    dataKey="previsto"
-                    name="Previsto"
-                    fill={seriesColor(3)}
-                    radius={[0, 6, 6, 0]}
-                    style={{ cursor: "pointer" }}
-                    onClick={(data: any) => {
-                      const nivel = data?.payload?.nivel as
-                        | "I"
-                        | "II"
-                        | "III"
-                        | undefined;
-                      if (!nivel) return;
-                      abrirColaboradoresNivel(nivel);
-                    }}
-                  />
-                  <Bar
-                    dataKey="atual"
-                    name="Atual"
-                    fill={seriesColor(1)}
-                    radius={[0, 6, 6, 0]}
-                    style={{ cursor: "pointer" }}
-                    onClick={(data: any) => {
-                      const nivel = data?.payload?.nivel as
-                        | "I"
-                        | "II"
-                        | "III"
-                        | undefined;
-                      if (!nivel) return;
-                      abrirColaboradoresNivel(nivel);
-                    }}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </AsyncBoundary>
-          </CardContent>
-
-          {!seniorLoading && !seniorErro && seniorData.length > 0 ? (
-            <div className="grid gap-2 px-6 pb-4 pt-0 sm:grid-cols-3">
-              {seniorData.map((x) => (
-                <button
-                  key={x.nivel}
-                  type="button"
-                  onClick={() => abrirColaboradoresNivel(x.nivel)}
-                  className="rounded-lg border border-border p-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <div className="text-2xs font-medium text-foreground">
-                    {x.label}
-                  </div>
-                  <div className="tabular mt-1 text-2xs text-muted-foreground">
-                    {fmtInt(x.atual)} / {fmtInt(x.previsto)}
-                  </div>
-                  <div
-                    className={cn(
-                      "tabular text-2xs font-medium",
-                      x.diff >= 0 ? "text-success" : "text-destructive"
-                    )}
-                  >
-                    {x.diff >= 0 ? "+" : "−"}
-                    {fmtInt(Math.abs(x.diff))} • {fmtPct(x.pct)}
-                  </div>
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </Card>
-      </div>
-
-      {/* ===== Modais de detalhamento =====
-          Os quatro eram ~300 linhas da mesma estrutura; agora é um <DataDialog>. */}
-
-      <DataDialog
-        open={detOpen}
-        onOpenChange={setDetOpen}
-        title="Detalhamento de atividades"
-        description={
-          detColab ? (
-            <span>
-              <b>{detColab.name}</b> • CODFUNC {detColab.codfunc}
-            </span>
-          ) : undefined
-        }
-        rows={detRows}
-        loading={detLoading}
-        error={detErro}
-        summary={`Total HH: ${Math.round(totalDetHH * 10) / 10}`}
-        emptyTitle="Nenhuma atividade encontrada"
-        emptyDescription="Este colaborador não tem apontamentos no período."
-        columns={[
-          { header: "Atividade", span: 7, cell: (r: DetAtividade) => r.descrprod },
-          { header: "Data execução", span: 3, muted: true, cell: (r: DetAtividade) => r.dtexecucao },
-          {
-            header: "HH",
-            span: 2,
-            align: "right",
-            cell: (r: DetAtividade) => Math.round((Number(r.hh) || 0) * 10) / 10,
-          },
-        ]}
-      />
-
-      <DataDialog
-        open={faltOpen}
-        onOpenChange={setFaltOpen}
-        size="xl"
-        title="Materiais faltantes"
-        description={
-          <span>
-            Supervisor <b>{CODUSU_LOGADO}</b> • {MMYYYY_LABEL}
-          </span>
-        }
-        rows={faltRows}
-        loading={faltListLoading}
-        error={faltListErro}
-        summary={`Total: ${faltRows.length}`}
-        emptyTitle="Nenhum material faltante"
-        emptyDescription="Não há pendências de material para o filtro atual."
-        onRetry={() => {
-          setFaltRows([]);
-          abrirFaltantes();
-        }}
-        rowKey={(r: FaltaItem, i) => `${r.chassi}-${r.codprod}-${i}`}
-        columns={[
-          { header: "Chassi", span: 2, cell: (r: FaltaItem) => r.chassi },
-          { header: "Cód. Prod", span: 2, cell: (r: FaltaItem) => r.codprod },
-          { header: "Descrição", span: 5, cell: (r: FaltaItem) => r.descrprod },
-          { header: "Necessidade", span: 2, muted: true, cell: (r: FaltaItem) => r.necessidade },
-          { header: "Entrega", span: 1, align: "right", muted: true, cell: (r: FaltaItem) => r.dataEntrega },
-        ]}
-      />
-
-      <DataDialog
-        open={retrOpen}
-        onOpenChange={setRetrOpen}
-        size="xl"
-        title="Retrabalho — detalhamento"
-        description={
-          <span>
-            Supervisor <b>{CODUSU_LOGADO}</b> • {MMYYYY_LABEL}
-          </span>
-        }
-        rows={retrRows}
-        loading={retrListLoading}
-        error={retrListErro}
-        summary={`Total HH: ${Math.round(retrTotalModal * 10) / 10}`}
-        emptyTitle="Nenhum retrabalho encontrado"
-        emptyDescription="Não há registros de retrabalho no mês/ano selecionado."
-        onRetry={() => {
-          setRetrRows([]);
-          abrirRetrabalho();
-        }}
-        rowKey={(r: RetrabItem, i) => `${r.setor}-${r.atividade}-${i}`}
-        columns={[
-          { header: "Setor", span: 3, cell: (r: RetrabItem) => r.setor },
-          { header: "Atividade", span: 7, cell: (r: RetrabItem) => r.atividade },
-          {
-            header: "HH",
-            span: 2,
-            align: "right",
-            muted: true,
-            cell: (r: RetrabItem) => Math.round((Number(r.hh) || 0) * 10) / 10,
-          },
-        ]}
-      />
-
-      <DataDialog
-        open={seniorNivelOpen}
-        onOpenChange={(open) => {
-          setSeniorNivelOpen(open);
-          if (!open) setSeniorNivelErro(null);
-        }}
-        title="Colaboradores por nível"
-        description={
-          <span>
-            Supervisor <b>{CODUSU_LOGADO}</b> • Nível{" "}
-            <b>{seniorNivelSel ? nivelLabel(seniorNivelSel) : "—"}</b>
-          </span>
-        }
-        rows={seniorNivelRows}
-        loading={seniorNivelLoading}
-        error={seniorNivelErro}
-        summary={`Total: ${seniorNivelRows.length}`}
-        emptyTitle="Nenhum colaborador encontrado"
-        emptyDescription="Não há colaboradores para o nível selecionado."
-        emptyIcon={Users}
-        onRetry={
-          seniorNivelSel
-            ? () => abrirColaboradoresNivel(seniorNivelSel)
-            : undefined
-        }
-        rowKey={(r: SeniorColab, i) => `${r.codfunc}-${i}`}
-        columns={[
-          { header: "CODFUNC", span: 3, cell: (r: SeniorColab) => r.codfunc },
-          { header: "Nome", span: 7, cell: (r: SeniorColab) => r.nomefunc },
-          { header: "Nível", span: 2, align: "right", muted: true, cell: (r: SeniorColab) => r.nivel },
-        ]}
-      />
+      {auditarOpe && ope.dados && (
+        <OpeAuditoriaDialog
+          titulo={`fábrica · ${rotuloMes}`}
+          ini={iniMes}
+          fim={ateHoje}
+          // O mesmo universo de linhas que getOpeDados consulta para o card.
+          linhas={[...LINHAS_MENORES_ARR, ...LINHAS_MAIORES_ARR]}
+          setor={null}
+          abaInicial="ponto"
+          totais={{ ponto: ope.dados.ponto, ativ: ope.dados.ativ, perdas: ope.dados.perdas, opePct: ope.dados.opePct }}
+          onClose={() => setAuditarOpe(false)}
+        />
+      )}
     </div>
   );
 }

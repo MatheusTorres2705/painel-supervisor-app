@@ -11,18 +11,16 @@
 // A INTERFACE foi portada para o design system deste projeto. Diferenças:
 //  · o período usa o DateRangePicker (aplica ao confirmar, como o "Aplicar" de lá);
 //  · rótulos clicáveis viraram <button> — lá eram <span onClick>, sem teclado;
-//  · os formatadores vêm de lib/formatDiretoria (ver o cabeçalho de lá).
+//  · os formatadores vêm de lib/formatDiretoria (ver o cabeçalho de lá);
+//  · os detalhamentos de ponto e de atividades (lá, listas cruas) viraram a
+//    AUDITORIA do OPE (components/ope/OpeAuditoriaDialog): ponto agrupado por
+//    colaborador, atividades por barco com o avanço do cronograma e conferência
+//    contra o número clicado. Toda célula das grades "Setores" e "OPE por setor
+//    e galpão" abre a auditoria do seu recorte (setor, setor × galpão, totais),
+//    Perdas abre a aba de retrabalho, e os cards OPE / Horas de ponto /
+//    Atividades também abrem. Mesmas consultas de detalhe de lá.
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
-  Download,
-  Eye,
-  EyeOff,
-  Search,
-} from "lucide-react";
+import { AlertTriangle, Eye, EyeOff } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -34,8 +32,7 @@ import {
   CartesianGrid,
 } from "recharts";
 
-import { num, int, pct, signed, hoursHM, DASH } from "@/lib/formatDiretoria";
-import { norm } from "@/lib/tabela";
+import { num, pct, signed, DASH } from "@/lib/formatDiretoria";
 import { dataOracle, isoLocal, parseData, type IsoRange } from "@/lib/datetime";
 import {
   farolOpe,
@@ -47,15 +44,11 @@ import {
 import { GALPOES, faixaDe } from "@/lib/galpoes";
 import {
   getOpeDados,
-  getPontoDetalhe,
-  getAtivDetalhe,
   agregar,
   buildDailySeries,
   totaisOpe,
   type AggRow,
-  type AtivDetalheRow,
   type DailyPoint,
-  type PontoDetalheRow,
   type RawAtivRow,
   type RawPontoRow,
 } from "@/services/opeService";
@@ -68,23 +61,14 @@ import {
 import { cn } from "@/lib/utils";
 import type { Tone } from "@/lib/tone";
 
-import { exportTabela, slugArquivo, type ExportColumn } from "@/components/ui/table-export";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Chip } from "@/components/ui/chip";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { StatCard } from "@/components/patterns/StatCard";
+import { OpeAuditoriaDialog, type AbaAuditoria, type TotaisAuditoria } from "@/components/ope/OpeAuditoriaDialog";
 
 /* ── Helpers de período ─────────────────────────────────────── */
 /** Período padrão de lá: do dia 1º do mês até hoje. */
@@ -206,412 +190,40 @@ const OPCOES_SETOR_GRAF = [
   { label: "Reb.", sm: "REB" },
 ];
 
-/* ── Popup de detalhe de ponto ─────────────────────────────── */
-function PontoDetalhePopup({
-  titulo,
-  ini,
-  fim,
-  linhasArr,
-  setor,
-  onClose,
+/* ── Drill-down ────────────────────────────────────────────── */
+
+/** Qual aba da auditoria a célula clicada abre: ponto, atividades ou perdas. */
+type TipoDetalhe = AbaAuditoria;
+
+/** Um recorte detalhável: o que abrir, em qual aba, e contra quais números conferir. */
+type Recorte = { label: string; linhas: string[]; setor: string | null; totais: TotaisAuditoria; tipo: TipoDetalhe };
+
+/** Célula numérica que abre a auditoria do seu recorte; sem recorte, só o conteúdo. */
+function CelulaDetalhe({
+  recorte,
+  onAbrir,
+  title,
+  children,
 }: {
-  titulo: string;
-  ini: string;
-  fim: string;
-  linhasArr: string[];
-  setor: string | null;
-  onClose: () => void;
+  recorte: Recorte | null;
+  onAbrir: (r: Recorte) => void;
+  title: string;
+  children: React.ReactNode;
 }) {
-  const [rows, setRows] = useState<PontoDetalheRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
-
-  const chaveLinhas = linhasArr.join(",");
-  useEffect(() => {
-    setLoading(true);
-    setErro(null);
-    getPontoDetalhe(ini, fim, linhasArr, setor)
-      .then((res) => setRows(res))
-      .catch(() => setErro("Falha ao carregar detalhamento"))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ini, fim, chaveLinhas, setor]);
-
+  if (!recorte) return <>{children}</>;
   return (
-    <Dialog open onOpenChange={(v) => (v ? null : onClose())}>
-      <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>Detalhe — {titulo}</DialogTitle>
-          <DialogDescription>
-            {ini} até {fim}
-          </DialogDescription>
-        </DialogHeader>
-
-        {erro ? (
-          <Alert variant="destructive">{erro}</Alert>
-        ) : (
-          <div className="min-h-0 overflow-auto rounded-lg border border-border scrollbar-slim">
-            <table className="w-full min-w-[36rem] text-sm">
-              <thead className="sticky top-0 z-10 bg-muted">
-                <tr className="text-left">
-                  <th className={TH}>Código</th>
-                  <th className={TH}>Nome</th>
-                  <th className={cn(TH, prioridadeCls(2))}>Departamento</th>
-                  <th className={cn(TH, "text-right")}>Data</th>
-                  <th className={cn(TH, "text-right")}>H. Extra</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {loading ? (
-                  <SkeletonLinhas rows={8} cols={5} />
-                ) : rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-sm text-muted-foreground">
-                      Nenhum registro encontrado.
-                    </td>
-                  </tr>
-                ) : (
-                  rows.map((r, i) => (
-                    <tr key={i} className="hover:bg-muted/40">
-                      <td className={cn(TD, "tabular")}>{r.codigo}</td>
-                      <td className={cn(TD, "font-medium text-foreground")}>{r.nome}</td>
-                      <td className={cn(TD, "text-muted-foreground", prioridadeCls(2))}>
-                        {r.departamento}
-                      </td>
-                      <td className={cn(TD, "tabular text-right")}>{r.data}</td>
-                      <td
-                        className={cn(
-                          TD,
-                          "tabular text-right",
-                          r.heHoras > 0 ? "text-warning" : "text-muted-foreground/70"
-                        )}
-                      >
-                        {r.heHoras > 0 ? hoursHM(r.heHoras) : DASH}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {!loading && !erro ? (
-          <p className="text-2xs text-muted-foreground">{int(rows.length)} registros</p>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+    <LinkDetalhe title={title} onClick={() => onAbrir(recorte)}>
+      {children}
+    </LinkDetalhe>
   );
 }
 
-/* ── Drill-down de atividades ──────────────────────────────── */
-
-/** Qual detalhe a célula clicada abre: quem bateu ponto, ou o que foi feito. */
-type TipoDetalhe = "ponto" | "ativ";
-
-/** Quantas linhas a tabela pinta de uma vez. A exportação leva sempre tudo. */
-const ATIV_PAGINA = 300;
-/** A partir daqui o arquivo demora a ser montado — avisa antes de clicar. */
-const ATIV_PESADO = 2000;
-
-type SortState = { col: string; dir: "asc" | "desc" } | null;
-
-/** Coluna do drill-down: as de exportação, mais o valor de ordenação. */
-type ColAtiv = ExportColumn<AtivDetalheRow> & {
-  sortValue?: (r: AtivDetalheRow) => string | number;
-};
-
-/**
- * Atividades apontadas no recorte — o "de onde vem" da coluna Atividades.
- * A soma de Horas do rodapé fecha com o número do card clicado.
- */
-function AtividadesDetalhePopup({
-  titulo,
-  ini,
-  fim,
-  linhasArr,
-  setor,
-  onClose,
-}: {
-  titulo: string;
-  ini: string;
-  fim: string;
-  linhasArr: string[];
-  setor: string | null;
-  onClose: () => void;
-}) {
-  const [rows, setRows] = useState<AtivDetalheRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
-  const [busca, setBusca] = useState("");
-  const [sort, setSort] = useState<SortState>(null);
-  const [limite, setLimite] = useState(ATIV_PAGINA);
-  const [exportando, setExportando] = useState(false);
-
-  const chaveLinhas = linhasArr.join(",");
-  useEffect(() => {
-    setLoading(true);
-    setErro(null);
-    getAtivDetalhe(ini, fim, linhasArr, setor)
-      .then((res) => setRows(res))
-      .catch(() => setErro("Falha ao carregar as atividades"))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ini, fim, chaveLinhas, setor]);
-
-  const columns = useMemo<ColAtiv[]>(
-    () => [
-      { id: "setorMacro", header: "Setor", accessor: (r) => r.setorMacro || DASH, priority: 2 },
-      { id: "setor", header: "Equipe", accessor: (r) => r.setor || DASH, priority: 3 },
-      { id: "linha", header: "Linha", accessor: (r) => r.linha || DASH },
-      { id: "projeto", header: "Barco", accessor: (r) => r.projeto || DASH },
-      {
-        id: "codAtividade",
-        header: "Cód. ativ.",
-        accessor: (r) => r.codAtividade || DASH,
-        priority: 3,
-        sortValue: (r) => Number(r.codAtividade) || 0,
-      },
-      {
-        id: "atividade",
-        header: "Atividade",
-        accessor: (r) => r.atividade || DASH,
-        cell: (r) => <span className="font-medium text-foreground">{r.atividade || DASH}</span>,
-      },
-      /* Ordena pela data real, não pelo texto: "02/09" vem antes de "10/08" em
-         ordem alfabética, e a coluna passaria a mentir sobre a cronologia. */
-      {
-        id: "data",
-        header: "Data",
-        accessor: (r) => r.data,
-        align: "right",
-        sortValue: (r) => parseData(r.data)?.getTime() ?? 0,
-        cell: (r) => <span className="tabular text-muted-foreground">{r.data || DASH}</span>,
-      },
-      {
-        id: "horas",
-        header: "Horas",
-        accessor: (r) => r.horas,
-        align: "right",
-        sortValue: (r) => r.horas,
-        exportValue: (r) => r.horas,
-        cell: (r) => <span className="tabular">{num(r.horas)}</span>,
-      },
-    ],
-    []
-  );
-
-  /* Um campo só para toda a linha: quem chega aqui procura um barco ou o nome
-     de uma atividade, não sabe em qual coluna o termo cai. */
-  const filtradas = useMemo(() => {
-    const termos = norm(busca).split(/\s+/).filter(Boolean);
-    if (termos.length === 0) return rows;
-    return rows.filter((r) => {
-      const alvo = norm(
-        [r.setorMacro, r.setor, r.linha, r.projeto, r.codAtividade, r.atividade, r.data].join(" ")
-      );
-      return termos.every((t) => alvo.includes(t));
-    });
-  }, [rows, busca]);
-
-  const ordenadas = useMemo(() => {
-    if (!sort) return filtradas;
-    const col = columns.find((c) => c.id === sort.col);
-    if (!col) return filtradas;
-    const valor = col.sortValue ?? ((r: AtivDetalheRow) => String(col.accessor(r) ?? ""));
-    const dir = sort.dir === "asc" ? 1 : -1;
-    return [...filtradas].sort((a, b) => {
-      const va = valor(a),
-        vb = valor(b);
-      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
-      return String(va).localeCompare(String(vb), "pt-BR") * dir;
-    });
-  }, [filtradas, sort, columns]);
-
-  /* Pintar 5.000 linhas de uma vez trava o tablet por segundos. O corte é só
-     de exibição — o rodapé conta o conjunto inteiro e o Excel leva tudo. */
-  const visiveis = ordenadas.slice(0, limite);
-
-  function handleSort(col: string) {
-    setSort((s) =>
-      s?.col === col ? { col, dir: s.dir === "asc" ? "desc" : "asc" } : { col, dir: "asc" }
-    );
-  }
-
-  /* Cede um frame ao React para pintar "Gerando..." antes do trabalho síncrono
-     de montar o .xlsx, que segura a thread e congelaria a tela sem aviso. */
-  async function exportar() {
-    setExportando(true);
-    await new Promise((r) => setTimeout(r, 60));
-    try {
-      const stamp = `${ini}_${fim}`.replace(/\//g, "-");
-      exportTabela(
-        columns,
-        ordenadas,
-        `atividades_${slugArquivo(titulo)}_${stamp}.xlsx`,
-        "Atividades"
-      );
-    } finally {
-      setExportando(false);
-    }
-  }
-
-  const totHoras = ordenadas.reduce((s, r) => s + r.horas, 0);
-  /* Com barco e dia na linha, a mesma atividade repete — o distinto responde
-     "quantas atividades diferentes rodaram". */
-  const atividadesDistintas = useMemo(
-    () => new Set(ordenadas.map((r) => `${r.codSetor}|${r.codAtividade}`)).size,
-    [ordenadas]
-  );
-  const pesado = ordenadas.length > ATIV_PESADO;
-
-  return (
-    <Dialog open onOpenChange={(v) => (v ? null : onClose())}>
-      <DialogContent className="flex max-h-[90vh] max-w-5xl flex-col overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>Atividades — {titulo}</DialogTitle>
-          <DialogDescription>
-            {ini} até {fim}
-          </DialogDescription>
-        </DialogHeader>
-
-        {/* Erro nunca vira tabela vazia: sem isto, "sem dados" e "a consulta
-            quebrou" ficam com a mesma cara na tela. */}
-        {erro ? (
-          <Alert variant="destructive" title={erro}>
-            Nenhum número desta lista pôde ser apurado.
-          </Alert>
-        ) : (
-          <div className="flex min-h-0 flex-col gap-3">
-            <div className="relative w-full sm:max-w-sm">
-              <Search
-                aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                value={busca}
-                onChange={(e) => {
-                  setBusca(e.target.value);
-                  setLimite(ATIV_PAGINA);
-                }}
-                placeholder="Filtrar por atividade, barco, equipe..."
-                aria-label="Filtrar atividades"
-                className="pl-9"
-              />
-            </div>
-
-            <div className="min-h-0 max-h-[55vh] overflow-auto rounded-lg border border-border scrollbar-slim">
-              <table className="w-full min-w-[40rem] text-sm">
-                <thead className="sticky top-0 z-10 bg-muted">
-                  <tr className="text-left">
-                    {columns.map((c) => {
-                      const ativa = sort?.col === c.id;
-                      const Icone = !ativa ? ArrowUpDown : sort?.dir === "asc" ? ArrowUp : ArrowDown;
-                      return (
-                        <th
-                          key={c.id}
-                          className={cn(TH, prioridadeCls(c.priority), c.align === "right" && "text-right")}
-                          aria-sort={
-                            ativa ? (sort?.dir === "asc" ? "ascending" : "descending") : undefined
-                          }
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleSort(c.id)}
-                            className={cn(
-                              "inline-flex items-center gap-1 rounded-sm uppercase tracking-wide hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                              ativa && "text-foreground"
-                            )}
-                          >
-                            {c.header}
-                            <Icone className="h-3 w-3" aria-hidden="true" />
-                          </button>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {loading ? (
-                    <SkeletonLinhas rows={8} cols={columns.length} />
-                  ) : visiveis.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={columns.length}
-                        className="px-3 py-8 text-center text-sm text-muted-foreground"
-                      >
-                        {busca
-                          ? "Nenhuma atividade corresponde ao filtro."
-                          : "Nenhuma atividade apontada neste recorte."}
-                      </td>
-                    </tr>
-                  ) : (
-                    visiveis.map((r, i) => (
-                      <tr
-                        key={`${r.codSetor}-${r.projeto}-${r.codAtividade}-${r.data}-${i}`}
-                        className="hover:bg-muted/40"
-                      >
-                        {columns.map((c) => (
-                          <td
-                            key={c.id}
-                            className={cn(TD, prioridadeCls(c.priority), c.align === "right" && "text-right")}
-                          >
-                            {c.cell ? c.cell(r) : c.accessor(r)}
-                          </td>
-                        ))}
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {visiveis.length < ordenadas.length && (
-              <div className="flex items-center justify-center gap-3">
-                <span className="tabular text-2xs text-muted-foreground">
-                  {int(visiveis.length)} de {int(ordenadas.length)}
-                </span>
-                <Button variant="outline" size="sm" onClick={() => setLimite((l) => l + ATIV_PAGINA)}>
-                  Mostrar mais
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
-          <div className="flex flex-wrap items-center gap-x-2 text-2xs text-muted-foreground">
-            {erro ? (
-              <span className="text-destructive">Nada a exportar: a consulta falhou.</span>
-            ) : (
-              <>
-                <span>
-                  Horas: <b className="tabular text-foreground">{num(totHoras)}</b>
-                </span>
-                <span aria-hidden>·</span>
-                <span className="tabular">{int(ordenadas.length)} registros</span>
-                <span aria-hidden>·</span>
-                <span className="tabular">{int(atividadesDistintas)} atividades distintas</span>
-              </>
-            )}
-          </div>
-          <Button
-            size="sm"
-            onClick={exportar}
-            disabled={loading || exportando || !!erro || ordenadas.length === 0}
-            title={
-              pesado
-                ? "Muitos registros — a geração do arquivo pode demorar alguns instantes"
-                : "Exporta todos os registros filtrados, não só as linhas exibidas"
-            }
-          >
-            <Download className="h-4 w-4" />
-            {exportando ? "Gerando Excel..." : "Exportar Excel"}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
+/** Totais de um conjunto de linhas agregadas — base da conferência da auditoria. */
+function totaisDeLinhas(ls: AggRow[]): TotaisAuditoria {
+  const ponto = ls.reduce((s, l) => s + l.horasReg, 0);
+  const ativ = ls.reduce((s, l) => s + l.horas, 0);
+  const perdas = ls.reduce((s, l) => s + l.horasRetrabalho, 0);
+  return { ponto, ativ, perdas, opePct: ponto > 0 ? (ativ / ponto) * 100 : null };
 }
 
 /* ── Gráfico de linha OPE diário ───────────────────────────── */
@@ -761,6 +373,9 @@ function Rotulo({ children, sub }: { children: React.ReactNode; sub?: string }) 
 /**
  * Matriz OPE: setores nas linhas, galpões nas colunas. Um setor pode estar bem
  * num galpão e mal noutro, e o número agregado some com os dois.
+ *
+ * Toda célula abre a auditoria do SEU recorte: setor × galpão, total do setor
+ * (todos os galpões), total do galpão (todos os setores) e o geral.
  */
 function MatrizSetorGalpao({
   porGalpao,
@@ -773,44 +388,26 @@ function MatrizSetorGalpao({
   loading: boolean;
   ini?: string;
   fim?: string;
-  onDetalhe: (label: string, linhas: string[], setor: string | null) => void;
+  onDetalhe: (r: Recorte) => void;
 }) {
   const setoresLabels = porGalpao[0]?.linhas.map((l) => l.label) ?? [];
+  const todasLinhas = porGalpao.flatMap((g) => g.linhasArr);
+  const podeDetalhar = !!(ini && fim);
 
   const opeDe = (l?: AggRow) => (l && l.horasReg > 0 ? (l.horas / l.horasReg) * 100 : null);
 
-  /* Total da coluna: soma as horas do galpão inteiro e divide — não é média
-     dos setores, que daria peso igual a um setor de 8.000h e a outro de 900h. */
-  const totalGalpao = (g: { linhas: AggRow[] }) => {
-    const ativ = g.linhas.reduce((s, l) => s + l.horas, 0);
-    const ponto = g.linhas.reduce((s, l) => s + l.horasReg, 0);
-    return ponto > 0 ? (ativ / ponto) * 100 : null;
-  };
+  /* Totais somam as horas e dividem — não é média dos setores, que daria peso
+     igual a um setor de 8.000h e a outro de 900h. */
+  const linhasDoSetor = (label: string) =>
+    porGalpao.flatMap((g) => g.linhas.filter((x) => x.label === label));
+  const todas = porGalpao.flatMap((g) => g.linhas);
 
-  /* Total da linha: mesmo princípio, somando os três galpões daquele setor. */
-  const totalSetor = (label: string) => {
-    let ativ = 0,
-      ponto = 0;
-    for (const g of porGalpao) {
-      const l = g.linhas.find((x) => x.label === label);
-      if (l) {
-        ativ += l.horas;
-        ponto += l.horasReg;
-      }
-    }
-    return ponto > 0 ? (ativ / ponto) * 100 : null;
+  const recorte = (label: string, linhas: string[], setor: string | null, ls: AggRow[]): Recorte | null => {
+    if (!podeDetalhar) return null;
+    const totais = totaisDeLinhas(ls);
+    if (totais.ponto <= 0 && totais.ativ <= 0) return null;
+    return { label, linhas, setor, totais, tipo: "ponto" };
   };
-
-  const geral = (() => {
-    let ativ = 0,
-      ponto = 0;
-    for (const g of porGalpao)
-      for (const l of g.linhas) {
-        ativ += l.horas;
-        ponto += l.horasReg;
-      }
-    return ponto > 0 ? (ativ / ponto) * 100 : null;
-  })();
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -837,32 +434,36 @@ function MatrizSetorGalpao({
             {loading ? (
               <SkeletonLinhas rows={6} cols={porGalpao.length + 2} />
             ) : (
-              setoresLabels.map((label) => (
-                <tr key={label} className="hover:bg-muted/40">
-                  <td className={TD}>
-                    {ini && fim && LABEL_TO_SETOR[label] ? (
-                      <LinkDetalhe
-                        title={`Ver colaboradores — ${label}`}
-                        onClick={() =>
-                          onDetalhe(label, porGalpao.flatMap((g) => g.linhasArr), LABEL_TO_SETOR[label])
-                        }
-                      >
+              setoresLabels.map((label) => {
+                const setor = LABEL_TO_SETOR[label] ?? null;
+                const doSetor = linhasDoSetor(label);
+                const recSetor = setor ? recorte(label, todasLinhas, setor, doSetor) : null;
+                return (
+                  <tr key={label} className="hover:bg-muted/40">
+                    <td className={TD}>
+                      <CelulaDetalhe recorte={recSetor} onAbrir={onDetalhe} title={`Auditar ${label} — todos os galpões`}>
                         {label}
-                      </LinkDetalhe>
-                    ) : (
-                      label
-                    )}
-                  </td>
-                  {porGalpao.map((g) => (
-                    <td key={g.label} className={cn(TD, "tabular text-right")}>
-                      <CelulaOpe valor={opeDe(g.linhas.find((x) => x.label === label))} />
+                      </CelulaDetalhe>
                     </td>
-                  ))}
-                  <td className={cn(TD, "tabular text-right")}>
-                    <CelulaOpe valor={totalSetor(label)} />
-                  </td>
-                </tr>
-              ))
+                    {porGalpao.map((g) => {
+                      const l = g.linhas.find((x) => x.label === label);
+                      const rec = setor && l ? recorte(`${label} · ${g.label}`, g.linhasArr, setor, [l]) : null;
+                      return (
+                        <td key={g.label} className={cn(TD, "tabular text-right")}>
+                          <CelulaDetalhe recorte={rec} onAbrir={onDetalhe} title={`Auditar ${label} no ${g.label}`}>
+                            <CelulaOpe valor={opeDe(l)} />
+                          </CelulaDetalhe>
+                        </td>
+                      );
+                    })}
+                    <td className={cn(TD, "tabular text-right")}>
+                      <CelulaDetalhe recorte={recSetor} onAbrir={onDetalhe} title={`Auditar ${label} — todos os galpões`}>
+                        <CelulaOpe valor={totaisDeLinhas(doSetor).opePct} />
+                      </CelulaDetalhe>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
           {!loading && (
@@ -871,11 +472,15 @@ function MatrizSetorGalpao({
                 <td className={TD}>Total</td>
                 {porGalpao.map((g) => (
                   <td key={g.label} className={cn(TD, "tabular text-right")}>
-                    <CelulaOpe valor={totalGalpao(g)} />
+                    <CelulaDetalhe recorte={recorte(g.label, g.linhasArr, null, g.linhas)} onAbrir={onDetalhe} title={`Auditar ${g.label} — todos os setores`}>
+                      <CelulaOpe valor={totaisDeLinhas(g.linhas).opePct} />
+                    </CelulaDetalhe>
                   </td>
                 ))}
                 <td className={cn(TD, "tabular text-right")}>
-                  <CelulaOpe valor={geral} />
+                  <CelulaDetalhe recorte={recorte("Geral", todasLinhas, null, todas)} onAbrir={onDetalhe} title="Auditar o geral">
+                    <CelulaOpe valor={totaisDeLinhas(todas).opePct} />
+                  </CelulaDetalhe>
                 </td>
               </tr>
             </tfoot>
@@ -887,6 +492,11 @@ function MatrizSetorGalpao({
 }
 
 /* ── Tabela por seção ──────────────────────────────────────── */
+/**
+ * Toda célula abre a auditoria do recorte da linha: Ponto, Pendências e OPE na
+ * aba de ponto; Atividades na de atividades; Perdas na de perdas. O Total abre
+ * o escopo inteiro da tabela.
+ */
 function TabelaCard({
   titulo,
   subtitulo,
@@ -905,26 +515,19 @@ function TabelaCard({
   fim?: string;
   linhasArr?: string[];
 }) {
-  const [detalhe, setDetalhe] = useState<{
-    label: string;
-    linhas: string[];
-    setor: string | null;
-    tipo: TipoDetalhe;
-  } | null>(null);
+  const [detalhe, setDetalhe] = useState<Recorte | null>(null);
 
   /** Recorte (linhas + setor) da linha clicada; `null` = não detalhável. */
-  function recorteDaLinha(label: string): { linhas: string[]; setor: string | null } | null {
+  function recorteDaLinha(l: AggRow, tipo: TipoDetalhe): Recorte | null {
     if (!ini || !fim) return null;
-    const opeLinhas = OPE_LABEL_TO_LINHAS[label];
-    if (opeLinhas) return { linhas: opeLinhas, setor: null };
-    if (linhasArr && LABEL_TO_SETOR[label]) return { linhas: linhasArr, setor: LABEL_TO_SETOR[label] };
+    const totais = totaisDeLinhas([l]);
+    const opeLinhas = OPE_LABEL_TO_LINHAS[l.label];
+    if (opeLinhas) return { label: l.label, linhas: opeLinhas, setor: null, totais, tipo };
+    if (linhasArr && LABEL_TO_SETOR[l.label]) return { label: l.label, linhas: linhasArr, setor: LABEL_TO_SETOR[l.label], totais, tipo };
     return null;
   }
-
-  function abrirDetalhe(label: string, tipo: TipoDetalhe) {
-    const recorte = recorteDaLinha(label);
-    if (recorte) setDetalhe({ label, ...recorte, tipo });
-  }
+  const recorteTotal = (tipo: TipoDetalhe): Recorte | null =>
+    ini && fim && linhasArr ? { label: "Total", linhas: linhasArr, setor: null, totais: totaisDeLinhas(linhas), tipo } : null;
 
   const totAtivH = linhas.reduce((s, l) => s + l.horas, 0);
   const totRetrabH = linhas.reduce((s, l) => s + l.horasRetrabalho, 0);
@@ -938,28 +541,18 @@ function TabelaCard({
   return (
     <>
       {/* montado só quando aberto: cada abertura começa com estado limpo */}
-      {detalhe &&
-        ini &&
-        fim &&
-        (detalhe.tipo === "ponto" ? (
-          <PontoDetalhePopup
-            titulo={`${titulo} — ${detalhe.label}`}
-            ini={ini}
-            fim={fim}
-            linhasArr={detalhe.linhas}
-            setor={detalhe.setor}
-            onClose={() => setDetalhe(null)}
-          />
-        ) : (
-          <AtividadesDetalhePopup
-            titulo={`${titulo} — ${detalhe.label}`}
-            ini={ini}
-            fim={fim}
-            linhasArr={detalhe.linhas}
-            setor={detalhe.setor}
-            onClose={() => setDetalhe(null)}
-          />
-        ))}
+      {detalhe && ini && fim && (
+        <OpeAuditoriaDialog
+          titulo={`${titulo} — ${detalhe.label}`}
+          ini={ini}
+          fim={fim}
+          linhas={detalhe.linhas}
+          setor={detalhe.setor}
+          abaInicial={detalhe.tipo}
+          totais={detalhe.totais}
+          onClose={() => setDetalhe(null)}
+        />
+      )}
       <div className="flex flex-col gap-1.5">
         <Rotulo sub={subtitulo}>{titulo}</Rotulo>
         <div className="overflow-x-auto rounded-lg border border-border bg-card scrollbar-slim">
@@ -989,47 +582,39 @@ function TabelaCard({
               ) : (
                 linhas.map((l) => {
                   const pend = l.horasReg - l.horas - l.horasRetrabalho;
-                  const isClickable = !!recorteDaLinha(l.label);
                   return (
                     <tr key={l.label} className="hover:bg-muted/40">
                       <td className={TD}>
-                        {isClickable ? (
-                          <LinkDetalhe
-                            title={`Ver colaboradores — ${l.label}`}
-                            onClick={() => abrirDetalhe(l.label, "ponto")}
-                          >
-                            {l.label}
-                          </LinkDetalhe>
-                        ) : (
-                          l.label
-                        )}
+                        <CelulaDetalhe recorte={l.horasReg > 0 || l.horas > 0 ? recorteDaLinha(l, "ponto") : null} onAbrir={setDetalhe} title={`Auditar ${l.label} — colaboradores`}>
+                          {l.label}
+                        </CelulaDetalhe>
                       </td>
                       <td className={cn(TD, "tabular text-right", prioridadeCls(3))}>
-                        <span className="font-semibold text-success">{num(l.horasReg)}</span>
+                        <CelulaDetalhe recorte={l.horasReg > 0 ? recorteDaLinha(l, "ponto") : null} onAbrir={setDetalhe} title={`Ver colaboradores — ${l.label}`}>
+                          <span className="font-semibold text-success">{num(l.horasReg)}</span>
+                        </CelulaDetalhe>
                       </td>
-                      {/* Atividades abre a lista que compõe o número. */}
                       <td className={cn(TD, "tabular text-right font-semibold")}>
-                        {isClickable ? (
-                          <LinkDetalhe
-                            title={`Ver atividades — ${l.label}`}
-                            onClick={() => abrirDetalhe(l.label, "ativ")}
-                          >
-                            {num(l.horas)}
-                          </LinkDetalhe>
-                        ) : (
-                          num(l.horas)
-                        )}
+                        <CelulaDetalhe recorte={l.horas > 0 ? recorteDaLinha(l, "ativ") : null} onAbrir={setDetalhe} title={`Ver atividades por barco — ${l.label}`}>
+                          {num(l.horas)}
+                        </CelulaDetalhe>
                       </td>
                       <td className={cn(TD, "tabular text-right", prioridadeCls(2))}>
-                        <span className="font-semibold text-warning">
-                          {hasLoss(l.horasRetrabalho) ? num(l.horasRetrabalho) : DASH}
-                        </span>
+                        <CelulaDetalhe recorte={hasLoss(l.horasRetrabalho) ? recorteDaLinha(l, "perdas") : null} onAbrir={setDetalhe} title={`Ver retrabalho por barco — ${l.label}`}>
+                          <span className="font-semibold text-warning">
+                            {hasLoss(l.horasRetrabalho) ? num(l.horasRetrabalho) : DASH}
+                          </span>
+                        </CelulaDetalhe>
                       </td>
                       <td className={cn(TD, "tabular text-right", prioridadeCls(2))}>
-                        <span className={cn("font-semibold", pendCls(pend))}>{fmtPend(pend)}</span>
+                        <CelulaDetalhe recorte={pend !== 0 ? recorteDaLinha(l, "ponto") : null} onAbrir={setDetalhe} title={`Pendências = ponto − atividades − perdas — ${l.label}`}>
+                          <span className={cn("font-semibold", pendCls(pend))}>{fmtPend(pend)}</span>
+                        </CelulaDetalhe>
                       </td>
                       <td className={cn(TD, "tabular text-right")}>
-                        <CelulaOpe valor={opeDe(l.horas, l.horasReg)} />
+                        <CelulaDetalhe recorte={l.horasReg > 0 ? recorteDaLinha(l, "ponto") : null} onAbrir={setDetalhe} title={`Auditar OPE — ${l.label}`}>
+                          <CelulaOpe valor={opeDe(l.horas, l.horasReg)} />
+                        </CelulaDetalhe>
                       </td>
                     </tr>
                   );
@@ -1042,19 +627,31 @@ function TabelaCard({
                 <tr>
                   <td className={TD}>Total</td>
                   <td className={cn(TD, "tabular text-right", prioridadeCls(3))}>
-                    <span className="text-success">{num(totPontoH)}</span>
-                  </td>
-                  <td className={cn(TD, "tabular text-right")}>{num(totAtivH)}</td>
-                  <td className={cn(TD, "tabular text-right", prioridadeCls(2))}>
-                    <span className="text-warning">{hasLoss(totRetrabH) ? num(totRetrabH) : DASH}</span>
-                  </td>
-                  <td className={cn(TD, "tabular text-right", prioridadeCls(2))}>
-                    <span className={pendCls(totPontoH - totAtivH - totRetrabH)}>
-                      {fmtPend(totPontoH - totAtivH - totRetrabH)}
-                    </span>
+                    <CelulaDetalhe recorte={totPontoH > 0 ? recorteTotal("ponto") : null} onAbrir={setDetalhe} title="Ver colaboradores — total">
+                      <span className="text-success">{num(totPontoH)}</span>
+                    </CelulaDetalhe>
                   </td>
                   <td className={cn(TD, "tabular text-right")}>
-                    <CelulaOpe valor={opeDe(totAtivH, totPontoH)} />
+                    <CelulaDetalhe recorte={totAtivH > 0 ? recorteTotal("ativ") : null} onAbrir={setDetalhe} title="Ver atividades por barco — total">
+                      {num(totAtivH)}
+                    </CelulaDetalhe>
+                  </td>
+                  <td className={cn(TD, "tabular text-right", prioridadeCls(2))}>
+                    <CelulaDetalhe recorte={hasLoss(totRetrabH) ? recorteTotal("perdas") : null} onAbrir={setDetalhe} title="Ver retrabalho por barco — total">
+                      <span className="text-warning">{hasLoss(totRetrabH) ? num(totRetrabH) : DASH}</span>
+                    </CelulaDetalhe>
+                  </td>
+                  <td className={cn(TD, "tabular text-right", prioridadeCls(2))}>
+                    <CelulaDetalhe recorte={totPontoH - totAtivH - totRetrabH !== 0 ? recorteTotal("ponto") : null} onAbrir={setDetalhe} title="Pendências — total">
+                      <span className={pendCls(totPontoH - totAtivH - totRetrabH)}>
+                        {fmtPend(totPontoH - totAtivH - totRetrabH)}
+                      </span>
+                    </CelulaDetalhe>
+                  </td>
+                  <td className={cn(TD, "tabular text-right")}>
+                    <CelulaDetalhe recorte={totPontoH > 0 ? recorteTotal("ponto") : null} onAbrir={setDetalhe} title="Auditar OPE — total">
+                      <CelulaOpe valor={opeDe(totAtivH, totPontoH)} />
+                    </CelulaDetalhe>
                   </td>
                 </tr>
               </tfoot>
@@ -1127,11 +724,9 @@ export function OpeDetalhamentoModal() {
      lente para analisar, e quem a liga precisa saber que ligou. */
   const [ocultarMaturacao, setOcultarMaturacao] = useState(false);
   /* Drill-down disparado pela matriz — o `TabelaCard` tem o seu próprio. */
-  const [detalheGeral, setDetalheGeral] = useState<{
-    label: string;
-    linhas: string[];
-    setor: string | null;
-  } | null>(null);
+  const [detalheGeral, setDetalheGeral] = useState<Recorte | null>(null);
+  /* Auditoria aberta pelos cards de KPI — sempre o escopo inteiro da tela. */
+  const [auditoriaKpi, setAuditoriaKpi] = useState<TipoDetalhe | null>(null);
 
   const [dadosAtiv, setDadosAtiv] = useState<RawAtivRow[]>([]);
   const [dadosPonto, setDadosPonto] = useState<RawPontoRow[]>([]);
@@ -1208,13 +803,27 @@ export function OpeDetalhamentoModal() {
   return (
     <div className="space-y-5">
       {detalheGeral && periodo.ini && periodo.fim && (
-        <PontoDetalhePopup
+        <OpeAuditoriaDialog
           titulo={detalheGeral.label}
           ini={periodo.ini}
           fim={periodo.fim}
-          linhasArr={detalheGeral.linhas}
+          linhas={detalheGeral.linhas}
           setor={detalheGeral.setor}
+          abaInicial={detalheGeral.tipo}
+          totais={detalheGeral.totais}
           onClose={() => setDetalheGeral(null)}
+        />
+      )}
+      {auditoriaKpi && periodo.ini && periodo.fim && (
+        <OpeAuditoriaDialog
+          titulo={escopoAtual.label}
+          ini={periodo.ini}
+          fim={periodo.fim}
+          linhas={escopoAtual.linhas}
+          setor={null}
+          abaInicial={auditoriaKpi}
+          totais={{ ponto: tot.ponto, ativ: tot.ativ, perdas: tot.perdas, opePct: tot.opePct }}
+          onClose={() => setAuditoriaKpi(null)}
         />
       )}
 
@@ -1274,13 +883,15 @@ export function OpeDetalhamentoModal() {
           value={tot.opePct == null ? DASH : pct(tot.opePct)}
           loading={loading}
           tone={tomTotal}
-          detail={`atividades ÷ ponto · meta ${META_OPE}%`}
+          detail={`atividades ÷ ponto · meta ${META_OPE}% · clique para auditar`}
+          onClick={!loading && tot.opePct != null ? () => setAuditoriaKpi("ponto") : undefined}
         />
         <StatCard
           label="Horas de ponto"
           value={num(tot.ponto)}
           loading={loading}
-          detail="batidas de ponto × 8 h por dia (AD_BATPONTO)"
+          detail="batidas de ponto × 8 h por dia (AD_BATPONTO) · clique para ver os colaboradores"
+          onClick={!loading && tot.ponto > 0 ? () => setAuditoriaKpi("ponto") : undefined}
         />
         <StatCard
           label="Horas extras"
@@ -1292,7 +903,8 @@ export function OpeDetalhamentoModal() {
           label="Atividades"
           value={num(tot.ativ)}
           loading={loading}
-          detail="horas apontadas em AD_APOAVANCO, sem retrabalho"
+          detail="horas apontadas em AD_APOAVANCO, sem retrabalho · clique para ver por barco"
+          onClick={!loading && tot.ativ > 0 ? () => setAuditoriaKpi("ativ") : undefined}
         />
         <StatCard
           label="Pendências"
@@ -1351,7 +963,7 @@ export function OpeDetalhamentoModal() {
               loading={loading}
               ini={periodo.ini}
               fim={periodo.fim}
-              onDetalhe={(label, linhas, setor) => setDetalheGeral({ label, linhas, setor })}
+              onDetalhe={setDetalheGeral}
             />
           )}
         </div>

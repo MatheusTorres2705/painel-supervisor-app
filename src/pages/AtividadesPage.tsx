@@ -1,11 +1,18 @@
 // src/pages/AtividadesPage.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { obterReg } from "@/lib/obterReg";
-import { mesAnoKey, monthYearLabel, pad2 } from "@/lib/datetime";
-import { txt, type ErpRow } from "@/lib/format";
+import { mesAnoKey, monthYearLabel } from "@/lib/datetime";
 import { mensagemErro } from "@/lib/sankhyaRetorno";
-import { ORDEM_LINHAS, sqlLinhaProduto } from "@/lib/linhasProduto";
+import { ORDEM_LINHAS } from "@/lib/linhasProduto";
+import {
+  getOpsAvanco,
+  lerChaveMes,
+  mesesEntre,
+  pctAvanco as pct,
+  statusAvanco as statusFromAvanco,
+  type OpAvanco,
+  type StatusOP,
+} from "@/services/opsService";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,85 +26,14 @@ import {
   SheetTitle,
 } from "@/components/overlays/SideSheet";
 
-type StatusOP = "Baixo avanço" | "Em dia" | "Adiantado";
-
-type OPPlanejamento = {
-  op: string;            // IDIPROC
-  barco: string;         // BARCO (controle PA)
-  linha: string;         // DESCRGRUPOPROD
-  avancoPrev: number;    // AVANCO_PREV
-  avancoReal: number;    // AVANCO_REAL
-  codproj: number;
-  identificacao: string;
-  codparc: number | null;
-  nomeparc: string | null;
-
+type OPPlanejamento = OpAvanco & {
   // planejamento local (por enquanto só em memória)
   dtIniPlan?: string;    // YYYY-MM-DD
   dtFimPlan?: string;    // YYYY-MM-DD
 };
 
-const pct = (v: number) => {
-  if (!v || isNaN(v)) return 0;
-  if (v < 0) return 0;
-  if (v > 100) return 100;
-  return Math.round(v);
-};
-
-function statusFromAvanco(prev: number, real: number): StatusOP {
-  if (!prev && !real) return "Baixo avanço";
-  if (real >= prev + 10) return "Adiantado";
-  if (real >= prev - 10) return "Em dia";
-  return "Baixo avanço";
-}
-
-/* ── Período do cronograma ───────────────────────────────────────
-   O cronograma é mensal (AD_CRONOGRAMA.ANO / MES). O período é escolhido
-   em meses, "YYYY-MM", e vira pares ano × mês na consulta.
-
-   Antes os meses eram fixos no SQL (ANO 2026, meses 11,12,1..6) e a linha
-   fixa em NX 500 — sobra de uma troca manual de datas. A tela mostrava
-   poucas OPs e nunca o mês corrente. */
-
-type MesAno = { ano: number; mes: number };
-
-function lerChaveMes(k: string): MesAno {
-  const [a, m] = k.split("-").map(Number);
-  return { ano: a, mes: m };
-}
-
-function mesesEntre(ini: MesAno, fim: MesAno): MesAno[] {
-  const out: MesAno[] = [];
-  let { ano, mes } = ini;
-  while (ano < fim.ano || (ano === fim.ano && mes <= fim.mes)) {
-    out.push({ ano, mes });
-    mes += 1;
-    if (mes > 12) {
-      mes = 1;
-      ano += 1;
-    }
-  }
-  return out;
-}
-
-/**
- * Filtro de ano × mês do cronograma. O mês vai com e sem zero à esquerda
- * ('9' e '09'): o SQL antigo misturava os dois formatos e o Dashboard usa
- * sem zero, então não dá para confiar em um só.
- */
-function sqlMesesCronograma(ini: string, fim: string): string {
-  const porAno = new Map<number, Set<string>>();
-  for (const { ano, mes } of mesesEntre(lerChaveMes(ini), lerChaveMes(fim))) {
-    const s = porAno.get(ano) ?? new Set<string>();
-    s.add(`'${mes}'`);
-    s.add(`'${pad2(mes)}'`);
-    porAno.set(ano, s);
-  }
-  const partes = [...porAno].map(
-    ([ano, meses]) => `(CRO.ANO = '${ano}' AND CRO.MES IN (${[...meses].join(", ")}))`
-  );
-  return partes.length ? `(${partes.join(" OR ")})` : "1 = 0";
-}
+/* Período do cronograma: meses "YYYY-MM" que viram pares ano × mês na consulta
+   (services/opsService). Antes os meses eram fixos no SQL e a linha fixa em NX 500. */
 
 /** Do janeiro do ano passado ao dezembro do ano que vem. */
 function opcoesMes(hoje = new Date()): { value: string; label: string }[] {
@@ -145,112 +81,8 @@ export default function AtividadesPage() {
         setLoading(true);
         setErro(null);
 
-        const sql = `
-          SELECT
-            T.IDIPROC           AS OP,
-            T.BARCO             AS BARCO,
-            T.DESCRGRUPOPROD    AS LINHA,
-            TRUNC(AVG(T.PREVISTO)) AS AVANCO_PREV,
-            TRUNC(AVG(T.AVANCO))   AS AVANCO_REAL,
-            T.CODPROJ,
-            T.IDENTIFICACAO,
-            T.CODPARC,
-            T.NOMEPARC
-          FROM (
-            SELECT DISTINCT
-              (SELECT DISTINCT MAX(DATA)
-                 FROM AD_APOAVANCO AVO
-                 JOIN AD_COMPONENTECRONO CRO2
-                   ON CRO2.SEQ = AVO.SEQ
-                  AND AVO.CODUSU = CRO2.CODUSU
-                  AND AVO.CODPRODSP = CRO2.CODPRODSP
-                WHERE AVO.SEQ = DET.SEQ
-                  AND AVO.CODUSU = USU.CODUSU
-                  AND RETRABALHO = 'S') AS DTRETRABALHO,
-              Snk_Dividir(
-                ONE_NUMEROSUPPROD_PREV_DATA(USU.CODUSU , DET.SEQ, SYSDATE),
-                ONE_NUMEROSUPPROD_PREV(USU.CODUSU , DET.SEQ)
-              ) * 100 AS PREVISTO,
-              NVL(LOT.CONTROLEPA , 'Ordem não Lancada') AS BARCO,
-              GRU.NOMEGRUPO      AS MACROSETOR,
-              USU.CODGRUPO       AS SETOR,
-              USU.NOMEUSU,
-              DET.CODUSU,
-              CASE
-                WHEN Snk_Dividir(
-                       ONE_NUMEROSUPPROD_REA(USU.CODUSU , DET.SEQ),
-                       ONE_NUMEROSUPPROD_PREV(USU.CODUSU , DET.SEQ)
-                     ) * 100 > 100
-                THEN 100
-                ELSE Snk_Dividir(
-                       ONE_NUMEROSUPPROD_REA(USU.CODUSU , DET.SEQ),
-                       ONE_NUMEROSUPPROD_PREV(USU.CODUSU , DET.SEQ)
-                     ) * 100
-              END AS AVANCO,
-              DET.DTINICIOPREV,
-              DET.DTFIMPREV,
-              (SELECT MAX(DATA)
-                 FROM AD_APOAVANCO
-                WHERE CODUSU = USU.CODUSU
-                  AND SEQ = DET.SEQ) AS ULTAPO,
-              ONE_NUMEROSUPPROD_PREV(DET.CODUSU , DET.SEQ) as AvPrev,
-              ONE_NUMEROSUPPROD_REA(DET.CODUSU , DET.SEQ)  as AvReal,
-              DET.SEQ,
-              PROC.IDIPROC,
-              ${sqlLinhaProduto("PAI", "GRU2.DESCRGRUPOPROD")} AS DESCRGRUPOPROD,
-              PRJ.CODPROJ,
-              PRJ.IDENTIFICACAO,
-              PAR.CODPARC,
-              PAR.NOMEPARC
-            FROM AD_CRONOGRAMA CRO
-            JOIN TGFGRU GRU2
-              ON GRU2.CODGRUPOPROD = CRO.CODGRUPOPROD
-            JOIN TPRIPROC PROC
-              ON PROC.AD_CODPROJ = CRO.CODPROJ
-             AND PROC.STATUSPROC <> 'C'
-            JOIN TPRIPA LOT
-              ON LOT.IDIPROC = PROC.IDIPROC
-            JOIN AD_DETALCRONOGRAMA DET
-              ON DET.SEQ = CRO.SEQ
-            JOIN TSIUSU USU
-              ON USU.CODUSU = DET.CODUSU
-            JOIN TSIGRU GRU
-              ON GRU.CODGRUPO = USU.CODGRUPO
-            JOIN TCSPRJ PRJ
-              ON CRO.CODPROJ = PRJ.CODPROJ
-            JOIN TCSPRJ PAI
-              ON PAI.CODPROJ = PRJ.CODPROJPAI
-            LEFT JOIN TGFCAB CAB
-              ON PRJ.CODPROJ = CAB.CODPROJ
-             AND CAB.TIPMOV = 'P'
-            LEFT JOIN TGFPAR PAR
-              ON PAR.CODPARC = CAB.CODPARC
-            WHERE ${sqlMesesCronograma(periodo.ini, periodo.fim)}
-          ) T
-          GROUP BY
-            T.IDIPROC,
-            T.BARCO,
-            T.DESCRGRUPOPROD,
-            T.CODPROJ,
-            T.IDENTIFICACAO,
-            T.CODPARC,
-            T.NOMEPARC
-        `.trim();
-
-        const rows = await obterReg(sql);
+        const mapped: OPPlanejamento[] = await getOpsAvanco(periodo.ini, periodo.fim);
         if (cancel) return;
-
-        const mapped: OPPlanejamento[] = rows.map((r: ErpRow) => ({
-          op: txt(r.OP),
-          barco: txt(r.BARCO),
-          linha: txt(r.LINHA),
-          avancoPrev: Number(r.AVANCO_PREV ?? 0),
-          avancoReal: Number(r.AVANCO_REAL ?? 0),
-          codproj: Number(r.CODPROJ ?? 0),
-          identificacao: txt(r.IDENTIFICACAO),
-          codparc: r.CODPARC != null ? Number(r.CODPARC) : null,
-          nomeparc: r.NOMEPARC != null ? String(r.NOMEPARC) : null,
-        }));
 
         setOps(mapped);
         // Mantém o chassi escolhido só se ele ainda existe no período novo.

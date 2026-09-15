@@ -20,7 +20,7 @@ import { sqlLinhaProduto } from '../lib/linhasProduto';
 /* Movida da página sem alterar um byte (fora a coluna LINHA — ver o cabeçalho). A lista exclui kits (CODCONFKIT = 0), uma
    lista fixa de produtos ignorados e itens com troca de produto pendente. `mes`
    é **1-indexado** e entra na SQL nas duas grafias que existem na base ('3' e '03'). */
-function buildListaFaltasSql(ano: number, mes: number): string {
+function buildListaFaltasSql(ano: number, mes: number, sup: number | null = null): string {
   return `
 SELECT
     VEN.APELIDO,
@@ -78,7 +78,8 @@ LEFT JOIN TGFGRU GRUL   ON GRUL.CODGRUPOPROD = CRO.CODGRUPOPROD
 WHERE F.SALDO_FINAL < 0
   AND F.ANO = TO_CHAR(${ano})
   AND F.MES IN (TO_CHAR(${mes}), LPAD(TO_CHAR(${mes}), 2, '0'))
-  AND NOT F.DATAFIMPREV IS NULL
+  AND NOT F.DATAFIMPREV IS NULL${sup != null ? `
+  AND PAI.AD_CODSUPERVISOR = ${Number(sup)}` : ''}
   AND NVL(PRO.CODCONFKIT, 0) = 0
   AND F.CODPROD NOT IN (
     21757, 1818, 19463, 2672, 5790, 2760, 4849, 18785, 16814, 20966, 1465,
@@ -197,8 +198,10 @@ function mapFaltaDetalhe(r: unknown): FaltaDetalheRow {
  *
  * @param ano ano com 4 dígitos.
  * @param mes mês **1-indexado** (1 = janeiro).
+ * @param sup só barcos cujo projeto pai tem este supervisor (AD_CODSUPERVISOR) —
+ *   usado pelo Dashboard; sem ele o SQL é o da diretoria.
  */
-export async function getListaFaltas(ano: number, mes: number): Promise<FaltaDetalheRow[]> {
-  const rows = await obterReg(buildListaFaltasSql(ano, mes), { pageSize: 5000, maxPages: 10 });
+export async function getListaFaltas(ano: number, mes: number, sup: number | null = null): Promise<FaltaDetalheRow[]> {
+  const rows = await obterReg(buildListaFaltasSql(ano, mes, sup), { pageSize: 5000, maxPages: 10 });
   return rows.map(mapFaltaDetalhe);
 }
