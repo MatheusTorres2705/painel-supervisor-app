@@ -21,7 +21,11 @@
 //  · o Modal virou Dialog; o MonthYearPicker, dois <Select>;
 //  · rótulos clicáveis do ranking viraram <button> — lá só a <tr> tinha
 //    onClick, sem teclado;
-//  · os formatadores vêm de lib/formatDiretoria (ver o cabeçalho de lá).
+//  · os formatadores vêm de lib/formatDiretoria (ver o cabeçalho de lá);
+//  · ABA "Por setor produtivo" (não existe lá): pessoas, presentes, faltantes e
+//    % disponível por setor macro do OPE (AD_DEPLINHA.SETORMACRO), no mês da
+//    tela. A view AD_VFALTA não conhece departamento — o setor vem do cadastro
+//    do colaborador. A visão atual fica intacta na aba "Visão geral".
 import React from "react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell,
@@ -39,7 +43,9 @@ import {
   taxaAbs, type Sup,
   makeSqlMensal, makeSqlEfetivoMensal, makeSqlDia, makeSqlGerentes, makeSqlSupervisores,
   makeSqlFuncionarios, makeSqlDiasColab, makeSqlTopMes, makeSqlReincidencia,
+  getDadosAbsenteismoSetor, type DadosSetor,
 } from "@/services/absenteismoService";
+import { agruparAbsenteismoSetor } from "@/lib/absenteismoSetores";
 import { PANEL_MARGIN, PANEL_Y_WIDTH, axisProps, chartSemantic, gridProps, legendProps, token } from "@/lib/chartTheme";
 import { cn } from "@/lib/utils";
 import { Alert } from "@/components/ui/alert";
@@ -53,6 +59,7 @@ import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatCard } from "@/components/patterns/StatCard";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import { ChartPanels } from "@/components/patterns/ChartPanels";
+import { SetoresProdutivos } from "@/components/absenteismo/SetoresProdutivos";
 
 /* ===================== Helpers ===================== */
 const n = (v: unknown) => (v == null || v === "" ? 0 : Number(v));
@@ -262,6 +269,14 @@ export default function AbsenteismoPage() {
 
   const [ano, setAno] = React.useState(HOJE.getFullYear());
   const [mes, setMes] = React.useState(HOJE.getMonth() + 1);
+
+  /* Abas: a visão atual inteira fica em "geral"; a nova só consulta quando aberta. */
+  const [aba, setAba] = React.useState<"geral" | "setores">("geral");
+  const [dadosSetor, setDadosSetor] = React.useState<DadosSetor | null>(null);
+  const [galpao, setGalpao] = React.useState("todos");
+  const [setoresLoading, setSetoresLoading] = React.useState(false);
+  const [setoresErro, setSetoresErro] = React.useState<string | null>(null);
+  const [setoresTick, setSetoresTick] = React.useState(0);
 
   const [mensalAll, setMensalAll] = React.useState<MensalRow[]>([]);
   const [loadingMensal, setLoadingMensal] = React.useState(true);
@@ -485,6 +500,31 @@ export default function AbsenteismoPage() {
 
   const botaoVoltar = "mb-3 inline-flex items-center gap-1 rounded-sm text-xs text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
+  /* Trocar de galpão só reagrupa o que já veio do ERP. */
+  const resumoSetores = React.useMemo(() => agruparAbsenteismoSetor(dadosSetor, galpao), [dadosSetor, galpao]);
+
+  /* Aba por setor: só consulta quando está aberta; recarrega com mês, ano ou escopo. */
+  React.useEffect(() => {
+    if (aba !== "setores") return;
+    let alive = true;
+    (async () => {
+      setSetoresLoading(true);
+      setSetoresErro(null);
+      try {
+        const r = await getDadosAbsenteismoSetor(ano, mes, sup);
+        if (!alive) return;
+        setDadosSetor(r);
+      } catch (e: unknown) {
+        if (!alive) return;
+        setDadosSetor(null);
+        setSetoresErro(mensagemErro(e, "Falha ao carregar o absenteísmo por setor."));
+      } finally {
+        if (alive) setSetoresLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [aba, ano, mes, sup, setoresTick]);
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -525,8 +565,31 @@ export default function AbsenteismoPage() {
         )}
       </PageHeader>
 
-      {err && <Alert variant="destructive" title="Falha ao carregar">{err}</Alert>}
+      <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Visão do absenteísmo">
+        <Chip ativo={aba === "geral"} onClick={() => setAba("geral")}>Visão geral</Chip>
+        <Chip ativo={aba === "setores"} onClick={() => setAba("setores")}>Por setor produtivo</Chip>
+      </div>
 
+      {err && aba === "geral" && <Alert variant="destructive" title="Falha ao carregar">{err}</Alert>}
+
+      {aba === "setores" && (
+        <Secao titulo={`Pessoas, presentes e faltantes por setor — ${periodoLabel}`} semPadding>
+          <SetoresProdutivos
+            setores={resumoSetores.setores}
+            total={dadosSetor ? resumoSetores.total : null}
+            periodo={dadosSetor ? `${dadosSetor.ini} a ${dadosSetor.fim}` : ""}
+            galpao={galpao}
+            onGalpao={setGalpao}
+            foraDoGalpao={resumoSetores.foraDoGalpao}
+            loading={setoresLoading}
+            erro={setoresErro}
+            onRetry={() => setSetoresTick((t) => t + 1)}
+          />
+        </Secao>
+      )}
+
+      {aba === "geral" && (
+        <>
       {sup != null && !loadingMensal && efetivoMap.size === 0 && (
         <Alert variant="info" title="Nenhum colaborador na sua equipe">
           Não há colaboradores ativos com você como supervisor no cadastro (TFPFUN.USUVPJSUP) desde janeiro do ano passado.
@@ -626,6 +689,8 @@ export default function AbsenteismoPage() {
         <b>% Absenteísmo</b> = HH perdido ÷ HH disponível. <b>HH disponível</b> = soma, por dia útil (seg–sex), dos colaboradores ativos no dia × 8h — efetivo real via <span className="font-mono">TFPFUN.DTADM/DTDEM</span> (não conta demitidos/futuros; feriados não descontados). Faltas: view <span className="font-mono">AD_VFALTA</span>. Ranking por <b>AD_GERENTE</b> → supervisores → colaboradores → dias.
         {sup != null && <> <b>Apenas meus colaboradores</b>: faltas e efetivo só de quem tem você como supervisor no cadastro hoje (<span className="font-mono">TFPFUN.USUVPJSUP</span>) — em meses passados, a equipe atual.</>}
       </p>
+        </>
+      )}
 
       {/* Drill-down */}
       <Dialog open={dGerente !== null} onOpenChange={(v) => { if (!v) fecharModal(); }}>

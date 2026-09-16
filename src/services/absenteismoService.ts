@@ -4,6 +4,7 @@
 // da tela — HH perdido ÷ HH disponível, com o escopo "meus colaboradores".
 import { obterReg } from "@/lib/obterReg";
 import { txt, type ErpRow } from "@/lib/format";
+import { SQL_LINHA_DO_PONTO } from "@/services/opeService";
 
 export const esc = (v: string) => v.replace(/'/g, "''");
 export const oracleData = (d: string) => `TO_DATE('${d}','DD/MM/YYYY')`;
@@ -220,4 +221,103 @@ ORDER BY v.DTREF DESC, v.NOMEFUNC
     hhPerdido: numero(r.HH_PERDIDO),
     gestor: txt(r.GESTOR),
   }));
+}
+
+/* ── Aba "Por setor produtivo" (só deste painel) ─────────────
+   A view AD_VFALTA não conhece departamento: o setor vem do cadastro do
+   colaborador pelo caminho do OPE — TFPFUN.CODDEP → AD_DEPLINHA.SETORMACRO.
+   Duas consultas (quadro e faltas) agregadas no cliente, para o denominador
+   incluir quem NÃO faltou, que a view não tem como mostrar.
+
+   O serviço devolve as LINHAS CRUAS; quem agrupa (lib/absenteismoSetores) é que
+   aplica o filtro de galpão — trocar de galpão não refaz consulta. */
+
+/** Sem linha de produção: indiretos e administrativo entram aqui em vez de sumir. */
+export const SEM_SETOR = "(sem setor produtivo)";
+
+/** Uma pessoa × setor × linha de produção (a linha pode repetir a pessoa). */
+export type QuadroSetorRow = { setor: string; chave: string; linha: string | null };
+/** Uma pessoa × setor, com o que ela perdeu no mês. */
+export type FaltaSetorRow = { setor: string; chave: string; codfunc: number; nome: string; faltas: number; hhPerdido: number };
+export type DadosSetor = { quadro: QuadroSetorRow[]; faltas: FaltaSetorRow[]; ini: string; fim: string };
+
+const chavePessoa = (r: ErpRow) => `${txt(r.CODEMP)}-${txt(r.CODFUNC)}`;
+
+/**
+ * Quadro e faltas do mês por setor produtivo.
+ *
+ * Ativo = admitido até o fim do período e não demitido antes do começo dele —
+ * ou seja, ativo em ALGUM dia do mês. Quem entrou ou saiu no meio do mês pôde
+ * faltar e precisa estar no denominador.
+ *
+ * A linha de produção usa a MESMA tradução do ponto no OPE (SQL_LINHA_DO_PONTO,
+ * 480→500 e 600→620) que o quadro da Meta de Produção: cópias divergentes dessa
+ * expressão já produziram número errado.
+ *
+ * @param mes mês 1-indexado.
+ */
+export async function getDadosAbsenteismoSetor(
+  ano: number,
+  mes: number,
+  sup: Sup,
+  hoje = new Date()
+): Promise<DadosSetor> {
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  const fimMes = new Date(ano, mes, 0);
+  const ate = fimMes < hoje ? fimMes : hoje;
+  const ini = `01/${p2(mes)}/${ano}`;
+  const fim = `${p2(ate.getDate())}/${p2(ate.getMonth() + 1)}/${ate.getFullYear()}`;
+
+  // O LEFT JOIN mantém quem não tem linha de produção: o total da aba fecha com
+  // o indicador "Colaboradores ativos" do topo da tela.
+  const sqlQuadro = `
+SELECT DISTINCT
+  NVL(DEPL.SETORMACRO, '${SEM_SETOR}') AS SETOR,
+  F.CODEMP,
+  F.CODFUNC,
+  CASE WHEN DEPL.CODPROJPAI IS NULL THEN NULL ELSE ${SQL_LINHA_DO_PONTO} END AS LINHA
+FROM TFPFUN F
+LEFT JOIN AD_DEPLINHA DEPL ON DEPL.CODDEP = F.CODDEP
+WHERE TRUNC(F.DTADM) <= ${oracleData(fim)}
+  AND (F.DTDEM IS NULL OR TRUNC(F.DTDEM) >= ${oracleData(ini)})${escopoFun("F", sup)}
+`.trim();
+
+  /* Sem a linha no GROUP BY: departamento com duas linhas multiplicaria as
+     faltas. O galpão do faltante vem do quadro, pela chave da pessoa.
+     O JOIN com TFPFUN é por CODFUNC, como o FROM_BASE da tela: a view não traz
+     CODEMP. Se houver CODFUNC repetido entre empresas, a falta conta nas duas. */
+  const sqlFaltas = `
+SELECT
+  NVL(DEPL.SETORMACRO, '${SEM_SETOR}') AS SETOR,
+  F.CODEMP,
+  V.CODFUNC,
+  V.NOMEFUNC,
+  COUNT(*)            AS FALTAS,
+  SUM(V.HH_PERDIDO)   AS HH_PERDIDO
+FROM AD_VFALTA V
+JOIN TFPFUN F ON F.CODFUNC = V.CODFUNC
+LEFT JOIN AD_DEPLINHA DEPL ON DEPL.CODDEP = F.CODDEP
+WHERE TRUNC(V.DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFun("F", sup)}
+GROUP BY NVL(DEPL.SETORMACRO, '${SEM_SETOR}'), F.CODEMP, V.CODFUNC, V.NOMEFUNC
+`.trim();
+
+  const [quadroRaw, faltasRaw] = await Promise.all([
+    obterReg(sqlQuadro, { pageSize: 5000, maxPages: 10 }),
+    obterReg(sqlFaltas, { pageSize: 5000, maxPages: 10 }),
+  ]);
+
+  const quadro: QuadroSetorRow[] = (quadroRaw as ErpRow[]).map((r) => ({
+    setor: txt(r.SETOR) || SEM_SETOR,
+    chave: chavePessoa(r),
+    linha: txt(r.LINHA) || null,
+  }));
+  const faltas: FaltaSetorRow[] = (faltasRaw as ErpRow[]).map((r) => ({
+    setor: txt(r.SETOR) || SEM_SETOR,
+    chave: chavePessoa(r),
+    codfunc: numero(r.CODFUNC),
+    nome: txt(r.NOMEFUNC),
+    faltas: numero(r.FALTAS),
+    hhPerdido: numero(r.HH_PERDIDO),
+  }));
+  return { quadro, faltas, ini, fim };
 }
