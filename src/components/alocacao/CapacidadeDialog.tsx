@@ -36,7 +36,7 @@ export function CapacidadeDialog({
         <DialogHeader>
           <DialogTitle>Capacidade diária</DialogTitle>
           <DialogDescription>
-            Vale para todos os colaboradores. Feriados não são descontados. Fica salvo neste navegador.
+            Vale para todos os colaboradores. Feriados do calendário do ERP zeram o dia e somem do quadro — salvo se você marcar abaixo. Fica salvo neste navegador.
           </DialogDescription>
         </DialogHeader>
 
@@ -57,6 +57,21 @@ export function CapacidadeDialog({
             {(p) => <Input {...p} type="number" min={0} max={180} step={5} value={rascunho.almocoMin} onChange={(e) => set("almocoMin", Number(e.target.value))} />}
           </Field>
         </div>
+
+        <label className="mt-3 flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4 rounded border-border accent-primary"
+            checked={rascunho.trabalharFeriado}
+            onChange={(e) => set("trabalharFeriado", e.target.checked)}
+          />
+          <span>
+            Trabalhar em feriado
+            <span className="block text-xs text-muted-foreground">
+              Por padrão o feriado tem 0 h e some do quadro. Marque quando a fábrica convocar — o dia volta com as horas normais.
+            </span>
+          </span>
+        </label>
 
         <DialogFooter className="gap-2 sm:justify-between">
           <Button variant="ghost" onClick={() => setRascunho(CAPACIDADE_PADRAO)}>Restaurar padrão</Button>

@@ -7,6 +7,7 @@ import {
   Gauge,
   Grid3x3,
   Home,
+  ListChecks,
   KanbanSquare,
   PackageSearch,
   PackageX,
@@ -29,6 +30,7 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: Home, hint: "Visão geral de indicadores" },
+  { path: "/daily", label: "Daily da Produção", icon: ListChecks, hint: "Quadro de indicadores por galpão e setor" },
   { path: "/meta-producao", label: "Meta de Produção", icon: Target, hint: "Meta × realizado de HH da produção" },
   { path: "/ope", label: "OPE", icon: Gauge, hint: "Operacional de produção — atividades ÷ ponto" },
   { path: "/equipe", label: "Equipe", icon: Users, hint: "Colaboradores e desempenho" },

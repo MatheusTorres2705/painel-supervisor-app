@@ -20,7 +20,7 @@ import {
   horasPorAlocado,
   somarDias,
   type BlocoGantt,
-  type CapacidadeCfg,
+  type Escala,
   type ItemGantt,
 } from "./planejamento";
 
@@ -45,7 +45,7 @@ export function GanttDia({
   colabs: Colab[];
   demandas: Demanda[];
   externa: CargaExterna;
-  cfg: CapacidadeCfg;
+  cfg: Escala;
   setores: [number, string][];
   onColab: (id: number) => void;
 }) {

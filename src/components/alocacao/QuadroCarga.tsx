@@ -13,7 +13,7 @@ import {
   celula,
   celulaSetor,
   dataLocal,
-  type CapacidadeCfg,
+  type Escala,
   type IndiceCarga,
 } from "./planejamento";
 
@@ -57,7 +57,7 @@ export function QuadroCarga({
   setores: [number, string][];
   demandas: Demanda[];
   ix: IndiceCarga;
-  cfg: CapacidadeCfg;
+  cfg: Escala;
   diaAtivo: string;
   onDia: (dia: string) => void;
   onColab: (id: number) => void;

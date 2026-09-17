@@ -26,6 +26,7 @@ import {
   type ResultadoGravacao,
 } from "@/services/alocacaoService";
 import { PageHeader } from "@/components/patterns/PageHeader";
+import { SeloCalendario } from "@/components/patterns/SeloCalendario";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,6 +56,7 @@ import {
   atrasoDias,
   capacidadeDoDia,
   celula,
+  dataLocal,
   diasDoPeriodo,
   gravarCapacidade,
   horasPorAlocado,
@@ -66,10 +68,13 @@ import {
   soDataAlterada,
   somarDias,
   sugerirDistribuicao,
+  type Escala,
   type OrdemDemandas,
   type StatusFiltro,
   type Sugestao,
 } from "@/components/alocacao/planejamento";
+import { anosDoIntervalo } from "@/lib/calendario";
+import { useCalendario } from "@/hooks/useCalendario";
 
 const STATUS: { v: StatusFiltro; label: string }[] = [
   { v: "todas", label: "Todas" },
@@ -210,18 +215,27 @@ export default function AlocacaoPage() {
   );
   const colabDetalhe = colabs.find((c) => c.id === colabDetalheId) ?? null;
 
+  /* A distribuição automática olha até 45 dias à frente de hoje, então o
+     calendário precisa cobrir mais do que o período da tela. */
+  const anosCal = useMemo(
+    () => anosDoIntervalo(dataLocal(periodo.ini < hoje ? periodo.ini : hoje), dataLocal(somarDias(periodo.fin > hoje ? periodo.fin : hoje, MAX_DIAS_QUADRO))),
+    [periodo.ini, periodo.fin, hoje]
+  );
+  const cal = useCalendario(anosCal);
+  const escala = useMemo<Escala>(() => ({ ...cfg, feriados: cal.feriados }), [cfg, cal.feriados]);
+
   const ix = useMemo(() => indexarCarga(demandas, colabs, externa), [demandas, colabs, externa]);
-  const dias = useMemo(() => diasDoPeriodo(periodo.ini, periodo.fin, cfg), [periodo.ini, periodo.fin, cfg]);
+  const dias = useMemo(() => diasDoPeriodo(periodo.ini, periodo.fin, escala), [periodo.ini, periodo.fin, escala]);
   const quadroTruncado = dias.length >= MAX_DIAS_QUADRO && dias[dias.length - 1] < periodo.fin;
 
   /** Folga no dia; se `excluir` já conta nesse dia para o colaborador, devolve a parte dele. */
   const livreDe = useCallback(
     (cod: number, dia: string, excluir?: Demanda) => {
-      let livre = celula(ix, cod, dia, cfg).livre;
+      let livre = celula(ix, cod, dia, escala).livre;
       if (excluir && excluir.dtPlan === dia && excluir.alocados.includes(cod)) livre += horasPorAlocado(excluir);
       return livre;
     },
-    [ix, cfg]
+    [ix, escala]
   );
 
   const noPeriodo = useCallback((d: Demanda) => d.dtDemanda >= periodo.ini && d.dtDemanda <= periodo.fin, [periodo.ini, periodo.fin]);
@@ -252,7 +266,7 @@ export default function AlocacaoPage() {
     let carga = 0;
     for (const c of colabsVisiveis) {
       for (const d of dias) {
-        const x = celula(ix, c.id, d, cfg);
+        const x = celula(ix, c.id, d, escala);
         capacidade += x.capacidade;
         carga += x.total;
       }
@@ -269,7 +283,7 @@ export default function AlocacaoPage() {
       capacidade,
       carga,
     };
-  }, [demandas, doSetor, noPeriodo, hoje, colabsVisiveis, dias, ix, cfg]);
+  }, [demandas, doSetor, noPeriodo, hoje, colabsVisiveis, dias, ix, escala]);
 
   /** Colaborador × dia acima da capacidade por causa do que está na tela. */
   const sobrecargas = useMemo(() => {
@@ -278,13 +292,13 @@ export default function AlocacaoPage() {
     for (const [cod, porDia] of ix) {
       for (const [dia, p] of porDia) {
         if (p.tela <= 0) continue;
-        const cap = capacidadeDoDia(cfg, dia);
+        const cap = capacidadeDoDia(escala, dia);
         const total = p.tela + p.erp + p.externa;
         if (total > cap + 0.01) out.push({ nome: nome.get(cod) ?? `#${cod}`, dia, total, cap });
       }
     }
     return out.sort((a, b) => a.dia.localeCompare(b.dia) || b.total - b.cap - (a.total - a.cap));
-  }, [ix, colabs, cfg]);
+  }, [ix, colabs, escala]);
 
   /* ── Edição ──────────────────────────────────────────────── */
   const alterar = (chaves: Iterable<string>, patch: (d: Demanda) => Partial<Demanda>) => {
@@ -306,7 +320,7 @@ export default function AlocacaoPage() {
   }, [selecionadasDem]);
 
   const abrirDistribuicao = (alvo: Demanda[]) => {
-    setSugestao(sugerirDistribuicao(alvo, colabs, ix, cfg, hoje, periodo.fin));
+    setSugestao(sugerirDistribuicao(alvo, colabs, ix, escala, hoje, periodo.fin));
   };
 
   const aplicarDistribuicao = () => {
@@ -384,6 +398,7 @@ export default function AlocacaoPage() {
         description={`${codproj ? `Projeto ${codproj} · ` : ""}planeje as demandas por colaborador e dia dentro da capacidade`}
         actions={
           <>
+            <SeloCalendario cal={cal} carregando={cal.carregando} />
             <Button variant="outline" size="sm" onClick={() => setBacklogOpen(true)} disabled={loading}>
               <ClipboardList className="h-4 w-4" /> Backlog
               {resumo.atrasadas > 0 && <Badge variant="destructive" className="ml-1">{resumo.atrasadas}</Badge>}
@@ -473,7 +488,7 @@ export default function AlocacaoPage() {
           setores={setoresVisiveis}
           demandas={demandas}
           ix={ix}
-          cfg={cfg}
+          cfg={escala}
           diaAtivo={diaGantt}
           onDia={setDiaGantt}
           onColab={setColabDetalheId}
@@ -526,7 +541,7 @@ export default function AlocacaoPage() {
           colabs={colabsVisiveis}
           demandas={demandas}
           externa={externa}
-          cfg={cfg}
+          cfg={escala}
           setores={setores}
           onColab={setColabDetalheId}
         />
@@ -563,6 +578,8 @@ export default function AlocacaoPage() {
       <CapacidadeDialog
         open={capOpen}
         onOpenChange={setCapOpen}
+        /* O `cfg` puro, não a escala: este diálogo edita o que vai para o
+           localStorage, e o calendário não é configuração do usuário. */
         cfg={cfg}
         onSalvar={(c) => {
           setCfg(c);
@@ -575,7 +592,7 @@ export default function AlocacaoPage() {
         onFechar={() => setColabDetalheId(null)}
         dias={dias}
         ix={ix}
-        cfg={cfg}
+        cfg={escala}
         demandas={demandas}
         colabs={colabs}
         onTrocar={trocar}

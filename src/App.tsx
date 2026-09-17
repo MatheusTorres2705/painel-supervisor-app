@@ -8,6 +8,7 @@ import { ToastProvider } from "@/components/ui/toast";
 
 import LoginPage from "@/pages/LoginPage";
 import DashboardPage from "@/pages/DashboardPage";
+import DailyPage from "@/pages/DailyPage";
 import MnoPage from "@/pages/MnoPage";
 import OpePage from "@/pages/OpePage";
 import EquipePage from "@/pages/EquipePage";
@@ -43,6 +44,7 @@ export default function App() {
               }
             >
               <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/daily" element={<DailyPage />} />
               <Route path="/meta-producao" element={<MnoPage />} />
               <Route path="/ope" element={<OpePage />} />
               <Route path="/equipe" element={<EquipePage />} />

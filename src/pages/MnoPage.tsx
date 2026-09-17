@@ -101,7 +101,10 @@ import { Input } from "@/components/ui/input";
 import { Chip } from "@/components/ui/chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { anosDoIntervalo } from "@/lib/calendario";
+import { useCalendario } from "@/hooks/useCalendario";
 import { PageHeader } from "@/components/patterns/PageHeader";
+import { SeloCalendario } from "@/components/patterns/SeloCalendario";
 import { StatCard } from "@/components/patterns/StatCard";
 import { EmptyState } from "@/components/patterns/EmptyState";
 import {
@@ -304,8 +307,16 @@ export default function MnoPage() {
     [dailyRows, noGalpao]
   );
 
+  /* Anos que o calendário precisa cobrir: o filtro de período é livre, e a
+     matriz de meta pode apontar uma data avulsa fora dele. */
+  const anosCal = useMemo(() => {
+    const extra = metaDiaData ? parseData(metaDiaData)?.getFullYear() : undefined;
+    return [...new Set([...anosDoIntervalo(periodo.ini, periodo.fim), ...(extra ? [extra] : [])])];
+  }, [periodo, metaDiaData]);
+  const cal = useCalendario(anosCal);
+
   // ── Meta do escopo (fábrica ou galpão), rateada para o período ───────────────
-  const fator = useMemo(() => fatorRateioPeriodo(periodo), [periodo]);
+  const fator = useMemo(() => fatorRateioPeriodo(periodo, cal.feriados), [periodo, cal.feriados]);
   const rateado = Math.abs(fator - 1) > 0.0001; // período ≠ um mês cheio
 
   const metaSetorMensal =
@@ -399,8 +410,8 @@ export default function MnoPage() {
    * setor descarta o não mapeado, mas o total não pode, senão não bate com o TLC.
    */
   const resumo = useMemo(
-    () => resumoMnoPeriodo(realPeriodo, dailyPeriodo, periodo, metaHHTotal),
-    [realPeriodo, dailyPeriodo, periodo, metaHHTotal]
+    () => resumoMnoPeriodo(realPeriodo, dailyPeriodo, periodo, metaHHTotal, cal.feriados),
+    [realPeriodo, dailyPeriodo, periodo, metaHHTotal, cal.feriados]
   );
 
   const realizadoTotal = resumo.realizado;
@@ -443,6 +454,7 @@ export default function MnoPage() {
       label: string;
       dow: number;
       util: boolean;
+      feriado: boolean;
       futuro: boolean;
       hoje: boolean;
       metaDia: number;
@@ -456,7 +468,8 @@ export default function MnoPage() {
     const cur = inicioDoDia(periodo.ini);
     while (cur <= periodo.fim) {
       const iso = isoLocal(cur);
-      const util = isDiaUtil(cur);
+      const util = isDiaUtil(cur, cal.feriados);
+      const feriado = cal.feriados.has(iso);
       const futuro = cur > hoje;
       const metaDia = util ? metaDiaTotal : 0;
       metaAcum += metaDia;
@@ -466,6 +479,7 @@ export default function MnoPage() {
         iso,
         label: `${pad2(cur.getDate())}/${pad2(cur.getMonth() + 1)}`,
         dow: cur.getDay(),
+        feriado,
         util,
         futuro,
         hoje: cur.getTime() === hoje.getTime(),
@@ -478,7 +492,7 @@ export default function MnoPage() {
       cur.setDate(cur.getDate() + 1);
     }
     return out;
-  }, [dailyPeriodo, periodo, metaDiaTotal]);
+  }, [dailyPeriodo, periodo, metaDiaTotal, cal.feriados]);
 
   // Totais do rodapé da grade por setor
   const diarioTot = useMemo(() => {
@@ -524,8 +538,8 @@ export default function MnoPage() {
   const metaEscala = useMemo(() => {
     const data = metaDiaData ? parseData(metaDiaData) : null;
     if (!data) return { fator: 1, porDia: false, util: true, dias: 0, label: "" };
-    const util = isDiaUtil(data);
-    const dias = diasUteisNoMes(data.getFullYear(), data.getMonth() + 1);
+    const util = isDiaUtil(data, cal.feriados);
+    const dias = diasUteisNoMes(data.getFullYear(), data.getMonth() + 1, cal.feriados);
     return {
       fator: util && dias > 0 ? 1 / dias : 0,
       porDia: true,
@@ -533,7 +547,7 @@ export default function MnoPage() {
       dias,
       label: `${dataOracle(data)} (${DOW_PT[data.getDay()]})`,
     };
-  }, [metaDiaData]);
+  }, [metaDiaData, cal.feriados]);
 
   /* Na apresentação a fonte da raiz é escalada, mas os breakpoints do Tailwind
      são em px e não acompanham: em 1600px com escala 1,3 o layout lado a lado
@@ -596,7 +610,12 @@ export default function MnoPage() {
           <PageHeader
             title="Meta de Produção"
             description={`HH que a produção precisa entregar · ${periodoLabel} · ${escopoLabel}`}
-            actions={<PresentationButton onClick={() => setApresentacao(true)} />}
+            actions={
+              <>
+                <SeloCalendario cal={cal} carregando={cal.carregando} />
+                <PresentationButton onClick={() => setApresentacao(true)} />
+              </>
+            }
           >
             <div className="w-full space-y-3">
               <div className="flex flex-wrap items-center gap-3">
@@ -718,7 +737,7 @@ export default function MnoPage() {
             <StatCard
               label="Dias úteis"
               value={`${diasDecorridos}/${diasTotal}`}
-              detail="decorridos / total (seg–sex)"
+              detail={cal.completo ? "decorridos / total (seg–sex, sem feriados)" : "decorridos / total (seg–sex; feriados não descontados)"}
               icon={CalendarClock}
             />
             <StatCard label="Meta HH/dia" value={`${nf(metaDiaTotal)} h`} icon={Target} />
@@ -884,6 +903,14 @@ export default function MnoPage() {
                               {c.hoje && (
                                 <span className="ml-1.5 rounded-full bg-primary px-1.5 py-0.5 text-2xs text-primary-foreground">
                                   hoje
+                                </span>
+                              )}
+                              {c.feriado && (
+                                <span
+                                  className="ml-1.5 rounded-full border border-border px-1.5 py-0.5 text-2xs text-muted-foreground"
+                                  title="Feriado no calendário do Sankhya — não recebe meta"
+                                >
+                                  feriado
                                 </span>
                               )}
                             </td>

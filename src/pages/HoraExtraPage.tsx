@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import { obterReg } from "@/lib/obterReg";
-import { FROM_HORA_EXTRA, escopoSupervisor } from "@/services/horaExtraService";
+import { FROM_HORA_EXTRA, escopoEvento } from "@/services/horaExtraService";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useAuth } from "@/auth/AuthProvider";
@@ -31,6 +31,7 @@ import {
 } from "@/lib/horas";
 
 import { Badge } from "@/components/ui/badge";
+import { Chip } from "@/components/ui/chip";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -68,6 +69,14 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
 type StatusFilter = "Todos" | "S" | "N";
+
+/**
+ * Que programações a grade mostra.
+ *  · minhas  — as que EU lancei, com todos os colaboradores, de qualquer líder;
+ *  · aprovar — as que têm alguém pendente que EU posso liberar;
+ *  · todas   — as duas coisas, que é o universo trazido pela consulta.
+ */
+type Recorte = "todas" | "minhas" | "aprovar";
 type PeriodoTipo = "mes" | "custom";
 
 function pad2(n: number) {
@@ -110,7 +119,9 @@ function ymdToBrDate(ymd: string) {
  */
 const CAB_DATE_FIELD: "DTUSO" | "DTUSU" = "DTUSO";
 
-/* FROM_HORA_EXTRA e escopoSupervisor: services/horaExtraService (o Dashboard usa os mesmos). */
+/* FROM_HORA_EXTRA e escopoEvento: services/horaExtraService. O Dashboard usa o
+   mesmo FROM, mas com `escopoSupervisor` — lá o total é "a hora extra que é
+   minha", aqui a lista é "as programações que eu preciso acompanhar". */
 
 /**
  * Filtros e indicadores ficam fixos no topo só em tela larga E alta. No tablet
@@ -186,6 +197,7 @@ export default function HoraExtraPage() {
   const [nomeFunc, setNomeFunc] = useState("");
   const [nomeBusca, setNomeBusca] = useState(""); // valor com debounce
   const [status, setStatus] = useState<StatusFilter>("Todos");
+  const [recorte, setRecorte] = useState<Recorte>("todas");
 
   // Antes, cada tecla digitada disparava um SELECT no Oracle.
   useEffect(() => {
@@ -299,10 +311,11 @@ export default function HoraExtraPage() {
           NVL(FUN.LIBERADO,'N') AS LIBERADO,
           SUP.CODUSU AS CODIGO_SUPERVISOR,
           SUP.NOMEUSU AS NOME_SUPERVISOR,
+          HR.CODUSU AS CODIGO_SOLICITANTE,
           SOL.NOMEUSU AS NOME_SOLICITANTE
         ${FROM_HORA_EXTRA}
         LEFT JOIN TFPDEP DEP ON DEP.CODDEP = HR.CODDEP
-        WHERE ${escopoSupervisor(CODUSU_SUP)}
+        WHERE ${escopoEvento(CODUSU_SUP)}
           ${filtrosSql()}
         ORDER BY HR.DTUSO DESC, F.NOMEFUNC
       `.trim();
@@ -328,8 +341,11 @@ export default function HoraExtraPage() {
             | "S"
             | "N",
 
-          codigoSupervisor: Number(x.CODIGO_SUPERVISOR ?? 0),
+          /* null, e não 0: "sem líder cadastrado" precisa ser distinguível de
+             um código — é quem o solicitante passa a poder aprovar. */
+          codigoSupervisor: x.CODIGO_SUPERVISOR == null ? null : Number(x.CODIGO_SUPERVISOR),
           nomeSupervisor: String(x.NOME_SUPERVISOR ?? ""),
+          codigoSolicitante: Number(x.CODIGO_SOLICITANTE ?? 0),
           nomeSolicitante: String(x.NOME_SOLICITANTE ?? ""),
         };
       });
@@ -370,7 +386,7 @@ export default function HoraExtraPage() {
         const sql = `
           SELECT HR.HRINI, HR.HRFIN
           ${FROM_HORA_EXTRA}
-          WHERE ${escopoSupervisor(CODUSU_SUP)}
+          WHERE ${escopoEvento(CODUSU_SUP)}
             AND TO_CHAR(HR.DTUSO, 'MM/YYYY') = '${anterior}'
             ${recorteSql}
         `.trim();
@@ -423,10 +439,21 @@ export default function HoraExtraPage() {
     };
   }, []);
 
-  const eventos = useMemo(
+  const todosEventos = useMemo(
     () => agruparEventos(rows, CODUSU_SUP),
     [rows, CODUSU_SUP]
   );
+
+  /* O recorte é client-side: a consulta já trouxe as programações que eu lancei
+     E as que têm gente da minha equipe. Trocar o chip não vai ao banco. */
+  const eventos = useMemo(() => {
+    if (recorte === "minhas") return todosEventos.filter((e) => e.souSolicitante);
+    if (recorte === "aprovar") return todosEventos.filter((e) => e.itensAprovaveis.some((x) => x.liberado === "N"));
+    return todosEventos;
+  }, [todosEventos, recorte]);
+
+  const qtdMinhas = todosEventos.filter((e) => e.souSolicitante).length;
+  const qtdAprovar = todosEventos.filter((e) => e.itensAprovaveis.some((x) => x.liberado === "N")).length;
 
   // Um único evento no resultado já abre expandido.
   const jaAutoExpandiu = useRef(false);
@@ -436,10 +463,12 @@ export default function HoraExtraPage() {
     setExpandidos(new Set([eventos[0].codBancoHoras]));
   }, [eventos]);
 
+  /* Aprovável = da minha equipe, ou sem líder numa programação minha (senão a
+     hora desse colaborador não teria quem liberasse). Mesma regra de
+     `agruparEventos`, aplicada às linhas do recorte visível. */
   const pendentesElegiveis = useMemo(
-    () =>
-      rows.filter((r) => r.liberado === "N" && r.codigoSupervisor === CODUSU_SUP),
-    [rows, CODUSU_SUP]
+    () => eventos.flatMap((e) => e.itensAprovaveis).filter((r) => r.liberado === "N"),
+    [eventos]
   );
 
   /* ============================= Ações ============================= */
@@ -1223,6 +1252,31 @@ export default function HoraExtraPage() {
         comparativoLoading={comparativoLoading}
         onVerPendentes={() => setStatus("N")}
       />
+
+      {/* Recorte da grade. Não vai ao banco: a consulta já traz as programações
+          que eu lancei e as que têm alguém da minha equipe. */}
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Recorte das programações">
+        {([
+          { v: "todas", label: "Todas", n: todosEventos.length, dica: "Tudo que eu lancei e tudo que tem alguém da minha equipe" },
+          { v: "minhas", label: "Minhas programações", n: qtdMinhas, dica: "As que eu lancei — com todos os colaboradores, de qualquer líder" },
+          { v: "aprovar", label: "Para eu aprovar", n: qtdAprovar, dica: "Programações com colaborador pendente que eu posso liberar" },
+        ] as const).map((o) => (
+          <Chip
+            key={o.v}
+            ativo={recorte === o.v}
+            /* Limpa a seleção junto: manter marcado o que saiu de vista faria a
+               barra de lote encolher sozinha, sem o usuário entender por quê. */
+            onClick={() => {
+              setRecorte(o.v);
+              setSelecionados(new Set());
+            }}
+            title={o.dica}
+          >
+            {o.label}
+            <Badge variant={recorte === o.v ? "secondary" : "muted"} className="ml-1.5">{o.n}</Badge>
+          </Chip>
+        ))}
+      </div>
 
       {/* Barra de ação em lote — aparece só quando há seleção. Gruda logo abaixo
           do bloco fixo (ou no topo, quando ele não está fixo). */}

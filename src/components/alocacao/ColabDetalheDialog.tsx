@@ -13,7 +13,7 @@ import { Select } from "@/components/ui/select";
 import { num, toBR } from "@/lib/format";
 import { toneSurface } from "@/lib/tone";
 import { cn } from "@/lib/utils";
-import { celula, horasPorAlocado, type CapacidadeCfg, type IndiceCarga } from "./planejamento";
+import { celula, horasPorAlocado, type Escala, type IndiceCarga } from "./planejamento";
 
 const TH = "px-3 py-2 text-left text-2xs font-medium uppercase tracking-wide text-muted-foreground";
 
@@ -31,7 +31,7 @@ export function ColabDetalheDialog({
   onFechar: () => void;
   dias: string[];
   ix: IndiceCarga;
-  cfg: CapacidadeCfg;
+  cfg: Escala;
   demandas: Demanda[];
   colabs: Colab[];
   onTrocar: (item: ItemErp, de: Colab, para: number) => Promise<void>;

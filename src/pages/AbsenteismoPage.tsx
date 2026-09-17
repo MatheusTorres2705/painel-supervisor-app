@@ -41,7 +41,7 @@ import type { ErpRow } from "@/lib/format";
 import { mensagemErro } from "@/lib/sankhyaRetorno";
 import {
   taxaAbs, type Sup,
-  makeSqlMensal, makeSqlEfetivoMensal, makeSqlDia, makeSqlGerentes, makeSqlSupervisores,
+  makeSqlMensal, getEfetivoMensal, makeSqlDia, makeSqlGerentes, makeSqlSupervisores,
   makeSqlFuncionarios, makeSqlDiasColab, makeSqlTopMes, makeSqlReincidencia,
   getDadosAbsenteismoSetor, type DadosSetor,
 } from "@/services/absenteismoService";
@@ -280,6 +280,8 @@ export default function AbsenteismoPage() {
 
   const [mensalAll, setMensalAll] = React.useState<MensalRow[]>([]);
   const [loadingMensal, setLoadingMensal] = React.useState(true);
+  /** `false` = a função FERIADO do ERP não respondeu; o HH disponível é seg–sex puro. */
+  const [feriadosOk, setFeriadosOk] = React.useState(true);
   const [dias, setDias] = React.useState<{ dia: string; faltas: number; hh: number; pctAbs: number }[]>([]);
   const [gerentes, setGerentes] = React.useState<(GrupoRow)[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -301,11 +303,13 @@ export default function AbsenteismoPage() {
       const efIni = `01/01/${anoIni}`;
       const efFim = `${pad2(HOJE.getDate())}/${pad2(HOJE.getMonth() + 1)}/${HOJE.getFullYear()}`;
       try {
-        const [faltaRaw, efRaw] = await Promise.all([
+        const [faltaRaw, ef] = await Promise.all([
           obterReg(makeSqlMensal(sup), { pageSize: 5000, maxPages: 5 }),
-          obterReg(makeSqlEfetivoMensal(efIni, efFim, sup), { pageSize: 5000, maxPages: 5 }),
+          getEfetivoMensal(efIni, efFim, sup),
         ]);
+        const efRaw = ef.rows;
         if (!alive) return;
+        setFeriadosOk(ef.feriadosDescontados);
         setMensalAll(faltaRaw.map(r => ({
           ano: n(getAny(r, "ANOREF")), mes: n(getAny(r, "MESREF")),
           faltantes: n(getAny(r, "FALTANTES")), faltas: n(getAny(r, "FALTAS")), hh: n(getAny(r, "HH_PERDIDO")),
@@ -686,7 +690,7 @@ export default function AbsenteismoPage() {
       </Secao>
 
       <p className="text-xs text-muted-foreground">
-        <b>% Absenteísmo</b> = HH perdido ÷ HH disponível. <b>HH disponível</b> = soma, por dia útil (seg–sex), dos colaboradores ativos no dia × 8h — efetivo real via <span className="font-mono">TFPFUN.DTADM/DTDEM</span> (não conta demitidos/futuros; feriados não descontados). Faltas: view <span className="font-mono">AD_VFALTA</span>. Ranking por <b>AD_GERENTE</b> → supervisores → colaboradores → dias.
+        <b>% Absenteísmo</b> = HH perdido ÷ HH disponível. <b>HH disponível</b> = soma, por dia útil, dos colaboradores ativos no dia × 8h — efetivo real via <span className="font-mono">TFPFUN.DTADM/DTDEM</span> (não conta demitidos/futuros). {feriadosOk ? <>Dia útil = seg–sex <b>menos os feriados</b> do calendário do ERP (<span className="font-mono">FERIADO</span>).</> : <><b>Atenção:</b> o calendário de feriados do ERP não respondeu, então o dia útil aqui é seg–sex e o HH disponível está um pouco alto.</>} Faltas: view <span className="font-mono">AD_VFALTA</span>. Ranking por <b>AD_GERENTE</b> → supervisores → colaboradores → dias.
         {sup != null && <> <b>Apenas meus colaboradores</b>: faltas e efetivo só de quem tem você como supervisor no cadastro hoje (<span className="font-mono">TFPFUN.USUVPJSUP</span>) — em meses passados, a equipe atual.</>}
       </p>
         </>

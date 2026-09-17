@@ -6,6 +6,7 @@
 //   · erp      — o que já está gravado para ESTA OP (AD_DETALCRONOGRAMAFUNC);
 //   · externa  — o que está gravado para OUTRAS OPs no mesmo dia.
 // Capacidade = horas configuradas para o dia da semana (padrão 8 h seg–sex).
+import type { Feriados } from "@/lib/calendario";
 import type { Tone } from "@/lib/tone";
 import type { CargaExterna, Colab, Demanda } from "@/services/alocacaoService";
 
@@ -20,6 +21,8 @@ export type CapacidadeCfg = {
   /** "HH:MM" */
   almocoInicio: string;
   almocoMin: number;
+  /** Feriado normalmente zera o dia; ligue quando a fábrica convocar. */
+  trabalharFeriado: boolean;
 };
 
 export const CAPACIDADE_PADRAO: CapacidadeCfg = {
@@ -28,7 +31,18 @@ export const CAPACIDADE_PADRAO: CapacidadeCfg = {
   inicio: "07:00",
   almocoInicio: "12:00",
   almocoMin: 60,
+  trabalharFeriado: false,
 };
+
+/**
+ * A configuração MAIS o calendário de feriados — o que as regras de capacidade
+ * realmente precisam.
+ *
+ * É um tipo, e não um sétimo parâmetro em seis funções: `Escala` é atribuível a
+ * `CapacidadeCfg`, então quem só lê horário (`blocosGantt`) continua igual, e o
+ * compilador ainda aponta exatamente quem precisa do calendário.
+ */
+export type Escala = CapacidadeCfg & { readonly feriados: Feriados };
 
 const CHAVE_CFG = "alocacao:capacidade";
 
@@ -44,7 +58,10 @@ export function lerCapacidade(): CapacidadeCfg {
 
 export function gravarCapacidade(cfg: CapacidadeCfg) {
   try {
-    localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg));
+    /* Campo a campo de propósito: uma `Escala` chegando aqui gravaria o Set de
+       feriados como `{}` no localStorage. */
+    const { horasSemana, horasSabado, inicio, almocoInicio, almocoMin, trabalharFeriado } = cfg;
+    localStorage.setItem(CHAVE_CFG, JSON.stringify({ horasSemana, horasSabado, inicio, almocoInicio, almocoMin, trabalharFeriado }));
   } catch {
     /* armazenamento bloqueado: vale só nesta sessão */
   }
@@ -63,6 +80,7 @@ export function normalizarCapacidade(c: CapacidadeCfg): CapacidadeCfg {
     inicio: hhmm.test(c.inicio) ? c.inicio : CAPACIDADE_PADRAO.inicio,
     almocoInicio: hhmm.test(c.almocoInicio) ? c.almocoInicio : CAPACIDADE_PADRAO.almocoInicio,
     almocoMin: limitar(c.almocoMin, 0, 180, CAPACIDADE_PADRAO.almocoMin),
+    trabalharFeriado: c.trabalharFeriado === true,
   };
 }
 
@@ -83,22 +101,25 @@ export function somarDias(ymd: string, n: number): string {
   return isoDia(d);
 }
 
-export function capacidadeDoDia(cfg: CapacidadeCfg, ymd: string): number {
+export function capacidadeDoDia(esc: Escala, ymd: string): number {
+  /* Feriado zera antes do dia da semana: sábado de feriado com `horasSabado`
+     configurado também some, que é o que a fábrica parada significa. */
+  if (!esc.trabalharFeriado && esc.feriados.has(ymd)) return 0;
   const dow = dataLocal(ymd).getDay();
   if (dow === 0) return 0;
-  if (dow === 6) return cfg.horasSabado;
-  return cfg.horasSemana;
+  if (dow === 6) return esc.horasSabado;
+  return esc.horasSemana;
 }
 
 /** Máximo de dias no quadro — acima disso a tabela deixa de ser legível e a consulta pesa. */
 export const MAX_DIAS_QUADRO = 45;
 
 /** Dias do período com capacidade > 0 (domingo e sábado sem hora ficam de fora). */
-export function diasDoPeriodo(ini: string, fim: string, cfg: CapacidadeCfg): string[] {
+export function diasDoPeriodo(ini: string, fim: string, esc: Escala): string[] {
   if (!ini || !fim || fim < ini) return [];
   const out: string[] = [];
   for (let d = ini; d <= fim && out.length < MAX_DIAS_QUADRO; d = somarDias(d, 1)) {
-    if (capacidadeDoDia(cfg, d) > 0) out.push(d);
+    if (capacidadeDoDia(esc, d) > 0) out.push(d);
   }
   return out;
 }
@@ -149,10 +170,10 @@ export function tomCarga(total: number, capacidade: number): Tone {
   return "success";
 }
 
-export function celula(ix: IndiceCarga, codfunc: number, dia: string, cfg: CapacidadeCfg): Celula {
+export function celula(ix: IndiceCarga, codfunc: number, dia: string, esc: Escala): Celula {
   const p = ix.get(codfunc)?.get(dia) ?? vazio();
   const total = p.tela + p.erp + p.externa;
-  const capacidade = capacidadeDoDia(cfg, dia);
+  const capacidade = capacidadeDoDia(esc, dia);
   return {
     ...p,
     total,
@@ -179,13 +200,13 @@ export function celulaSetor(
   demandas: Demanda[],
   colabs: Colab[],
   ix: IndiceCarga,
-  cfg: CapacidadeCfg
+  esc: Escala
 ): CelulaSetor {
   const demanda = demandas
     .filter((d) => d.codusu === codusu && d.dtPlan === dia)
     .reduce((s, d) => s + d.hhPrev, 0);
   const doSetor = colabs.filter((c) => c.codSetores.includes(codusu));
-  const cap = capacidadeDoDia(cfg, dia);
+  const cap = capacidadeDoDia(esc, dia);
   const livre = doSetor.reduce((s, c) => {
     const p = ix.get(c.id)?.get(dia) ?? vazio();
     return s + Math.max(0, cap - p.erp - p.externa);
@@ -259,7 +280,7 @@ export function sugerirDistribuicao(
   alvo: Demanda[],
   colabs: Colab[],
   ix: IndiceCarga,
-  cfg: CapacidadeCfg,
+  esc: Escala,
   hoje: string,
   fim: string
 ): Sugestao {
@@ -269,7 +290,7 @@ export function sugerirDistribuicao(
   for (const [cod, dias] of ix) {
     for (const [dia, p] of dias) usado.set(chaveUso(cod, dia), p.tela + p.erp + p.externa);
   }
-  const folga = (cod: number, dia: string) => capacidadeDoDia(cfg, dia) - (usado.get(chaveUso(cod, dia)) ?? 0);
+  const folga = (cod: number, dia: string) => capacidadeDoDia(esc, dia) - (usado.get(chaveUso(cod, dia)) ?? 0);
 
   const ordem = alvo
     .filter((d) => d.alocados.length === 0)
@@ -288,7 +309,7 @@ export function sugerirDistribuicao(
     let escolha: { dia: string; ids: number[] } | null = null;
 
     for (let dia = inicio; dia <= limite && !escolha; dia = somarDias(dia, 1)) {
-      if (capacidadeDoDia(cfg, dia) <= 0) continue;
+      if (capacidadeDoDia(esc, dia) <= 0) continue;
       const porFolga = candidatos
         .map((c) => ({ id: c.id, livre: folga(c.id, dia) }))
         .filter((x) => x.livre > 0.01)

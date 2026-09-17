@@ -9,6 +9,7 @@
 // ausência de base é `null` (a página traduz para 0 + `temRitmo`), porque no
 // primeiro dia do mês não existe ritmo, e um "0" seria lido como "não produziu".
 import { META_HH_TOTAL, resolveSetor, type Setor } from "./mnoConfig";
+import type { Feriados } from "./calendario";
 import { diasUteisNoMes, diasUteisEntre, inicioDoDia, ultimoDia } from "./datetime";
 import { div } from "./ritmo";
 import type { RealizadoSetor, RealizadoDia } from "../services/mnoService";
@@ -63,6 +64,7 @@ export function resumoMno(
   diaRows: RealizadoDia[],
   ano: number,
   mes: number,
+  feriados: Feriados,
   hoje = new Date(),
 ): ResumoMno {
   return resumoMnoPeriodo(
@@ -70,6 +72,7 @@ export function resumoMno(
     diaRows,
     { ini: new Date(ano, mes - 1, 1), fim: new Date(ano, mes - 1, ultimoDia(mes, ano)) },
     META_HH_TOTAL,
+    feriados,
     hoje,
   );
 }
@@ -93,18 +96,19 @@ export function resumoMnoPeriodo(
   diaRows: RealizadoDia[],
   periodo: PeriodoMno,
   meta: number,
+  feriados: Feriados,
   hoje = new Date(),
 ): ResumoMno {
   const ini = inicioDoDia(periodo.ini);
   const fim = inicioDoDia(periodo.fim);
   const realizado = periodoRows.reduce((s, r) => s + r.horas, 0);
 
-  const diasTotal = diasUteisEntre(ini, fim);
+  const diasTotal = diasUteisEntre(ini, fim, feriados);
   const hojeRef = inicioDoDia(hoje);
   /* O dia corrente é parcial e fica de fora: um dia pela metade puxaria a média
      para baixo e a projeção pioraria toda manhã, melhorando à tarde. */
   const ontem = new Date(hojeRef); ontem.setDate(ontem.getDate() - 1);
-  const diasDecorridos = ini > ontem ? 0 : diasUteisEntre(ini, fim < ontem ? fim : ontem);
+  const diasDecorridos = ini > ontem ? 0 : diasUteisEntre(ini, fim < ontem ? fim : ontem, feriados);
 
   /* Uma passada só: total até ontem, por setor mapeado, e o que ficou de fora. */
   let realAteOntem = 0;
@@ -147,7 +151,7 @@ export function resumoMnoPeriodo(
  * não em dias corridos: a meta é produção, e sábado/domingo não produzem. Mês
  * inteiro → 1; dois meses inteiros → 2; meia semana → a fração dela.
  */
-export function fatorRateioPeriodo(periodo: PeriodoMno): number {
+export function fatorRateioPeriodo(periodo: PeriodoMno, feriados: Feriados): number {
   const ini = inicioDoDia(periodo.ini);
   const fim = inicioDoDia(periodo.fim);
   let fator = 0;
@@ -156,9 +160,9 @@ export function fatorRateioPeriodo(periodo: PeriodoMno): number {
     const ano = cur.getFullYear(), mes = cur.getMonth() + 1;
     const mesIni = new Date(ano, mes - 1, 1);
     const mesFim = new Date(ano, mes - 1, ultimoDia(mes, ano));
-    const duMes = diasUteisNoMes(ano, mes);
+    const duMes = diasUteisNoMes(ano, mes, feriados);
     if (duMes > 0) {
-      fator += diasUteisEntre(ini > mesIni ? ini : mesIni, fim < mesFim ? fim : mesFim) / duMes;
+      fator += diasUteisEntre(ini > mesIni ? ini : mesIni, fim < mesFim ? fim : mesFim, feriados) / duMes;
     }
     cur.setMonth(cur.getMonth() + 1);
   }

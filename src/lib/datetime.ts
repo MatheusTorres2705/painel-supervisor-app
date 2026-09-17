@@ -44,27 +44,39 @@ export function ultimoDia(mes: number, ano: number): number {
   return new Date(ano, mes, 0).getDate();
 }
 
-/** Dia útil = segunda a sexta. Feriados não são descontados. */
-export function isDiaUtil(d: Date): boolean {
+/**
+ * Dia útil = segunda a sexta, descontados os feriados de `feriados`.
+ *
+ * O calendário é um parâmetro OBRIGATÓRIO, não opcional: a fábrica não produz
+ * em feriado, e a meta diária sai de uma divisão por esta contagem. Um
+ * parâmetro opcional deixaria um call site esquecido devolver um número
+ * silenciosamente otimista; assim o TypeScript cobra a decisão, e quem
+ * realmente quer ignorar feriados escreve `SEM_FERIADOS` (lib/calendario).
+ *
+ * O `Set` vem cru, e não o objeto `Calendario`, para este módulo não importar
+ * `lib/calendario` — é ele que importa `isoLocal` daqui.
+ */
+export function isDiaUtil(d: Date, feriados: ReadonlySet<string>): boolean {
   const dow = d.getDay();
-  return dow !== 0 && dow !== 6;
+  if (dow === 0 || dow === 6) return false;
+  return !feriados.has(isoLocal(d));
 }
 
 /** Dias úteis do mês, opcionalmente até `ateDia` (inclusive). */
-export function diasUteisNoMes(ano: number, mes: number, ateDia?: number): number {
+export function diasUteisNoMes(ano: number, mes: number, feriados: ReadonlySet<string>, ateDia?: number): number {
   const fim = ateDia ?? ultimoDia(mes, ano);
   let n = 0;
-  for (let d = 1; d <= fim; d++) if (isDiaUtil(new Date(ano, mes - 1, d))) n++;
+  for (let d = 1; d <= fim; d++) if (isDiaUtil(new Date(ano, mes - 1, d), feriados)) n++;
   return n;
 }
 
 /** Dias úteis entre duas datas, inclusive nas pontas. `fim < ini` → 0. */
-export function diasUteisEntre(ini: Date, fim: Date): number {
+export function diasUteisEntre(ini: Date, fim: Date, feriados: ReadonlySet<string>): number {
   let n = 0;
   const cur = inicioDoDia(ini);
   const ate = inicioDoDia(fim);
   while (cur <= ate) {
-    if (isDiaUtil(cur)) n++;
+    if (isDiaUtil(cur, feriados)) n++;
     cur.setDate(cur.getDate() + 1);
   }
   return n;
@@ -90,23 +102,10 @@ export function dataOracle(d: Date): string {
   return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
-/**
- * Dias úteis já concluídos (até ontem) no mês corrente.
- * Mês passado → mês inteiro. Mês futuro → 0.
- */
-export function diasUteisDecorridos(ano: number, mes: number, hoje = new Date()): number {
-  const ref = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
-  const inicioMes = new Date(ano, mes - 1, 1);
-  const fimMes = new Date(ano, mes, 0);
-  if (ref > fimMes) return diasUteisNoMes(ano, mes);
-  if (ref <= inicioMes) return 0;
-  return diasUteisNoMes(ano, mes, ref.getDate() - 1);
-}
-
-/** Dia do mês se `ano/mes` for o mês corrente; senão null. */
-export function diaDeHoje(ano: number, mes: number, hoje = new Date()): number | null {
-  return hoje.getFullYear() === ano && hoje.getMonth() + 1 === mes ? hoje.getDate() : null;
-}
+/* `diasUteisDecorridos` e `diaDeHoje` viviam aqui sem nenhum chamador. Saíram
+   junto com a mudança do calendário: propagar o parâmetro de feriados por
+   código morto só espalharia ruído. O ritmo da Meta de Produção faz a própria
+   conta de "até ontem" em lib/mnoCalc. */
 
 /** Faixa do mês no formato que o Oracle espera: DD/MM/YYYY. */
 export function rangeMes(ano: number, mes: number): { ini: string; fim: string } {

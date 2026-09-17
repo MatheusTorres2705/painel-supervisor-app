@@ -7,20 +7,46 @@ import { duracaoMin } from "@/lib/horas";
 import { txt, type ErpRow } from "@/lib/format";
 
 /**
- * Base comum da lista e do comparativo. Os INNER JOIN com TSIUSU também filtram
- * (colaborador sem supervisor cadastrado não aparece): por isso as duas
- * consultas precisam dos mesmos JOINs, senão contam universos diferentes.
+ * Base comum da lista e do comparativo — as duas precisam dos MESMOS JOINs,
+ * senão contam universos diferentes.
+ *
+ * Os TSIUSU são LEFT JOIN, e isso não é detalhe: eram INNER, e um colaborador
+ * sem supervisor cadastrado (`TFPFUN.USUVPJSUP` nulo) sumia da consulta inteira
+ * — junto com o lançamento, quando ele era o único da programação. O supervisor
+ * concluía que a programação não tinha sido gravada e lançava de novo.
  */
 export const FROM_HORA_EXTRA = `
         FROM AD_BANCOHORAS HR
         JOIN AD_BCOFUN FUN ON FUN.CODBANCOHORAS = HR.CODBANCOHORAS
         JOIN TFPFUN F ON F.CODFUNC = FUN.CODFUNC
-        JOIN TSIUSU SUP ON SUP.CODUSU = F.USUVPJSUP
-        JOIN TSIUSU SOL ON SOL.CODUSU = HR.CODUSU`;
+        LEFT JOIN TSIUSU SUP ON SUP.CODUSU = F.USUVPJSUP
+        LEFT JOIN TSIUSU SOL ON SOL.CODUSU = HR.CODUSU`;
 
-/** Eventos em que o usuário é supervisor do colaborador ou quem solicitou. */
+/**
+ * Recorte por LINHA: o colaborador é da minha equipe, ou o lançamento é meu.
+ * É o universo dos totais (Dashboard, Daily) — "a hora extra que é minha".
+ */
 export const escopoSupervisor = (codusu: number) =>
   `(F.USUVPJSUP = ${Number(codusu)} OR HR.CODUSU = ${Number(codusu)})`;
+
+/**
+ * Recorte por LANÇAMENTO: todo colaborador de toda programação que eu lancei ou
+ * que tem alguém da minha equipe.
+ *
+ * A tela de aprovação precisa disto e não do recorte por linha: numa
+ * programação com gente de vários líderes, o filtro por linha mostrava só a
+ * minha parte, e o supervisor não tinha como saber quem mais estava na mesma
+ * programação nem de quem cobrar a aprovação que falta.
+ */
+export const escopoEvento = (codusu: number) => {
+  const n = Number(codusu);
+  return `(HR.CODUSU = ${n} OR HR.CODBANCOHORAS IN (
+            SELECT BF.CODBANCOHORAS
+            FROM AD_BCOFUN BF
+            JOIN TFPFUN BFU ON BFU.CODFUNC = BF.CODFUNC
+            WHERE BFU.USUVPJSUP = ${n}
+          ))`;
+};
 
 export type ResumoHoraExtraMes = {
   pendentesMin: number;

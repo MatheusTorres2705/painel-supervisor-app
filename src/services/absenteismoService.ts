@@ -38,14 +38,21 @@ GROUP BY ANOREF, MESREF
 ORDER BY ANOREF, TO_NUMBER(MESREF)
 `;
 
-// Efetivo disponível por mês — dias úteis (seg–sex) × ativos no dia (DTADM/DTDEM)
-export const makeSqlEfetivoMensal = (ini: string, fim: string, sup: Sup) => `
+/**
+ * Efetivo disponível por mês — dias úteis × ativos no dia (DTADM/DTDEM).
+ *
+ * `descontarFeriados` chama a função do próprio Sankhya (a mesma do calendário
+ * do painel, ver services/feriadosService). O `MATERIALIZE` não é enfeite: sem
+ * ele o otimizador pode mesclar a CTE no JOIN com TFPFUN e avaliar `FERIADO`
+ * uma vez por dia × funcionário, em vez de uma vez por dia.
+ */
+export const makeSqlEfetivoMensal = (ini: string, fim: string, sup: Sup, descontarFeriados = true) => `
 WITH DIAS AS (
-  SELECT D FROM (
+  SELECT ${descontarFeriados ? "/*+ MATERIALIZE */ " : ""}D FROM (
     SELECT ${oracleData(ini)} + LEVEL - 1 AS D
     FROM DUAL CONNECT BY LEVEL <= ${oracleData(fim)} - ${oracleData(ini)} + 1
   )
-  WHERE TO_CHAR(D,'DY','NLS_DATE_LANGUAGE=ENGLISH') NOT IN ('SAT','SUN')
+  WHERE TO_CHAR(D,'DY','NLS_DATE_LANGUAGE=ENGLISH') NOT IN ('SAT','SUN')${descontarFeriados ? "\n    AND FERIADO(D, 0) = 0" : ""}
 ),
 EFETIVO AS (
   SELECT D.D, COUNT(*) AS ATIVOS
@@ -138,6 +145,29 @@ GROUP BY CODFUNC, ANOREF, MESREF
 `;
 
 
+/**
+ * Efetivo mensal, com degradação graciosa do calendário.
+ *
+ * `FERIADO` é uma função do dicionário do Sankhya: se ela não existir nesta
+ * base, estiver dentro de um package ou o usuário não tiver permissão, a
+ * consulta inteira falha — e com ela iriam o HH disponível e o % de
+ * absenteísmo. Preferimos o número levemente otimista (seg–sex) ao indicador
+ * em branco, e dizemos na tela qual dos dois está valendo.
+ */
+export async function getEfetivoMensal(
+  ini: string,
+  fim: string,
+  sup: Sup
+): Promise<{ rows: ErpRow[]; feriadosDescontados: boolean }> {
+  try {
+    const rows = (await obterReg(makeSqlEfetivoMensal(ini, fim, sup), { pageSize: 5000, maxPages: 5 })) as ErpRow[];
+    return { rows, feriadosDescontados: true };
+  } catch {
+    const rows = (await obterReg(makeSqlEfetivoMensal(ini, fim, sup, false), { pageSize: 5000, maxPages: 5 })) as ErpRow[];
+    return { rows, feriadosDescontados: false };
+  }
+}
+
 /* ── Usado pelo Dashboard ────────────────────────────────────── */
 
 export type AssiduidadeMes = {
@@ -151,6 +181,8 @@ export type AssiduidadeMes = {
   absenteismo: number | null;
   /** 100 − absenteísmo. */
   assiduidade: number | null;
+  /** `false` = o calendário do ERP não respondeu e a base é seg–sex pura. */
+  feriadosDescontados: boolean;
 };
 
 const pad2 = (x: number) => String(x).padStart(2, "0");
@@ -172,12 +204,13 @@ export async function getAssiduidade(
   const fimMes = new Date(ano, mes, 0);
   const ate = fimMes < hoje ? fimMes : hoje;
 
-  const [faltaRaw, efRaw] = await Promise.all([
+  const [faltaRaw, ef] = await Promise.all([
     obterReg(makeSqlMensal(sup), { pageSize: 5000, maxPages: 5 }),
     ate >= iniAnterior
-      ? obterReg(makeSqlEfetivoMensal(br(iniAnterior), br(ate), sup), { pageSize: 5000, maxPages: 5 })
-      : Promise.resolve([]),
+      ? getEfetivoMensal(br(iniAnterior), br(ate), sup)
+      : Promise.resolve({ rows: [] as ErpRow[], feriadosDescontados: true }),
   ]);
+  const efRaw = ef.rows;
 
   const doMes = (a: number, m: number): AssiduidadeMes => {
     const f = (faltaRaw as ErpRow[]).find((r) => numero(r.ANOREF) === a && numero(r.MESREF) === m);
@@ -194,6 +227,7 @@ export async function getAssiduidade(
       diasUteis: numero(e?.DIAS_UTEIS),
       absenteismo,
       assiduidade: absenteismo == null ? null : 100 - absenteismo,
+      feriadosDescontados: ef.feriadosDescontados,
     };
   };
 
@@ -320,4 +354,76 @@ GROUP BY NVL(DEPL.SETORMACRO, '${SEM_SETOR}'), F.CODEMP, V.CODFUNC, V.NOMEFUNC
     hhPerdido: numero(r.HH_PERDIDO),
   }));
   return { quadro, faltas, ini, fim };
+}
+
+/* ── Daily da produção: quadro e faltas por DIA ──────────────
+   A aba "Por setor produtivo" olha o mês fechado; a daily precisa de cada dia
+   da semana. Em vez de uma consulta por dia, trazemos as datas de admissão e
+   demissão e as faltas datadas: quem está ativo em cada dia é conta de cliente
+   (lib/dailyCalc). */
+
+export type QuadroPessoaDia = {
+  setor: string;
+  chave: string;
+  linha: string | null;
+  /** "YYYY-MM-DD" */
+  dtadm: string;
+  /** "YYYY-MM-DD" ou "" quando não há demissão. */
+  dtdem: string;
+};
+export type FaltaDia = { setor: string; chave: string; dia: string; faltas: number; hhPerdido: number };
+export type DadosSetorPeriodo = { quadro: QuadroPessoaDia[]; faltas: FaltaDia[] };
+
+/** @param ini,fim "DD/MM/YYYY" */
+export async function getDadosSetorPeriodo(ini: string, fim: string, sup: Sup): Promise<DadosSetorPeriodo> {
+  const sqlQuadro = `
+SELECT DISTINCT
+  NVL(DEPL.SETORMACRO, '${SEM_SETOR}') AS SETOR,
+  F.CODEMP,
+  F.CODFUNC,
+  CASE WHEN DEPL.CODPROJPAI IS NULL THEN NULL ELSE ${SQL_LINHA_DO_PONTO} END AS LINHA,
+  TO_CHAR(F.DTADM, 'YYYY-MM-DD') AS DTADM,
+  TO_CHAR(F.DTDEM, 'YYYY-MM-DD') AS DTDEM
+FROM TFPFUN F
+LEFT JOIN AD_DEPLINHA DEPL ON DEPL.CODDEP = F.CODDEP
+WHERE TRUNC(F.DTADM) <= ${oracleData(fim)}
+  AND (F.DTDEM IS NULL OR TRUNC(F.DTDEM) >= ${oracleData(ini)})${escopoFun("F", sup)}
+`.trim();
+
+  const sqlFaltas = `
+SELECT
+  NVL(DEPL.SETORMACRO, '${SEM_SETOR}') AS SETOR,
+  F.CODEMP,
+  V.CODFUNC,
+  TO_CHAR(V.DTREF, 'YYYY-MM-DD') AS DIA,
+  COUNT(*)          AS FALTAS,
+  SUM(V.HH_PERDIDO) AS HH_PERDIDO
+FROM AD_VFALTA V
+JOIN TFPFUN F ON F.CODFUNC = V.CODFUNC
+LEFT JOIN AD_DEPLINHA DEPL ON DEPL.CODDEP = F.CODDEP
+WHERE TRUNC(V.DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFun("F", sup)}
+GROUP BY NVL(DEPL.SETORMACRO, '${SEM_SETOR}'), F.CODEMP, V.CODFUNC, TO_CHAR(V.DTREF, 'YYYY-MM-DD')
+`.trim();
+
+  const [quadroRaw, faltasRaw] = await Promise.all([
+    obterReg(sqlQuadro, { pageSize: 5000, maxPages: 10 }),
+    obterReg(sqlFaltas, { pageSize: 5000, maxPages: 10 }),
+  ]);
+
+  return {
+    quadro: (quadroRaw as ErpRow[]).map((r) => ({
+      setor: txt(r.SETOR) || SEM_SETOR,
+      chave: chavePessoa(r),
+      linha: txt(r.LINHA) || null,
+      dtadm: txt(r.DTADM),
+      dtdem: txt(r.DTDEM),
+    })),
+    faltas: (faltasRaw as ErpRow[]).map((r) => ({
+      setor: txt(r.SETOR) || SEM_SETOR,
+      chave: chavePessoa(r),
+      dia: txt(r.DIA),
+      faltas: numero(r.FALTAS),
+      hhPerdido: numero(r.HH_PERDIDO),
+    })),
+  };
 }

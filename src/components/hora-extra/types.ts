@@ -1,6 +1,9 @@
 // src/components/hora-extra/types.ts
 import { duracaoMin } from "@/lib/horas";
 
+/** Rótulo de quem não tem supervisor no cadastro do ERP. */
+export const SEM_LIDER = "sem líder";
+
 /** Uma linha de AD_BCOFUN (um colaborador dentro de um evento). */
 export type HoraExtraRow = {
   codBancoHoras: number;
@@ -17,8 +20,10 @@ export type HoraExtraRow = {
   descrdep: string;
   liberado: "S" | "N";
 
-  codigoSupervisor: number;
+  /** `null` quando o colaborador não tem supervisor no cadastro (TFPFUN.USUVPJSUP). */
+  codigoSupervisor: number | null;
   nomeSupervisor: string;
+  codigoSolicitante: number;
   nomeSolicitante: string;
 };
 
@@ -35,7 +40,10 @@ export type Evento = {
   hrfin: string;
   coddep: number;
   descrdep: string;
+  codigoSolicitante: number;
   nomeSolicitante: string;
+  /** O usuário logado foi quem lançou esta programação. */
+  souSolicitante: boolean;
 
   itens: HoraExtraRow[];
 
@@ -45,8 +53,16 @@ export type Evento = {
   totalMinutos: number;
   pendentes: number;
   aprovados: number;
-  /** O usuário logado é supervisor de pelo menos um colaborador do evento. */
+  /**
+    * O que o usuário logado pode aprovar: os colaboradores da equipe dele e,
+    * quando a programação é dele, também os que não têm líder cadastrado —
+    * senão não sobra ninguém para liberar a hora desses.
+    */
   itensAprovaveis: HoraExtraRow[];
+  /** Colaboradores de outro líder: é com eles que o solicitante vai cobrar. */
+  itensDeOutroLider: HoraExtraRow[];
+  /** Líderes que ainda devem aprovação neste evento, para a tela nomear quem cobrar. */
+  lideresPendentes: string[];
 };
 
 export type Chave = `${number}`;
@@ -74,6 +90,11 @@ export function agruparEventos(
 
     itens.sort((a, b) => a.nomefunc.localeCompare(b.nomefunc, "pt-BR"));
 
+    const souSolicitante = base.codigoSolicitante === codusuSup;
+    const podeAprovar = (x: HoraExtraRow) =>
+      x.codigoSupervisor === codusuSup || (x.codigoSupervisor == null && souSolicitante);
+    const deOutroLider = itens.filter((x) => !podeAprovar(x));
+
     eventos.push({
       codBancoHoras,
       dtuso: base.dtuso,
@@ -82,14 +103,24 @@ export function agruparEventos(
       hrfin: base.hrfin,
       coddep: base.coddep,
       descrdep: base.descrdep,
+      codigoSolicitante: base.codigoSolicitante,
       nomeSolicitante: base.nomeSolicitante,
+      souSolicitante,
 
       itens,
       minutosPorPessoa,
       totalMinutos: minutosPorPessoa * itens.length,
       pendentes: itens.filter((x) => x.liberado === "N").length,
       aprovados: itens.filter((x) => x.liberado === "S").length,
-      itensAprovaveis: itens.filter((x) => x.codigoSupervisor === codusuSup),
+      itensAprovaveis: itens.filter(podeAprovar),
+      itensDeOutroLider: deOutroLider,
+      lideresPendentes: [
+        ...new Set(
+          deOutroLider
+            .filter((x) => x.liberado === "N")
+            .map((x) => x.nomeSupervisor || SEM_LIDER)
+        ),
+      ].sort((a, b) => a.localeCompare(b, "pt-BR")),
     });
   }
 

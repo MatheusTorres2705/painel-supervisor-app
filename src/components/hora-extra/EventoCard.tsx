@@ -18,7 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { diaCurto, faixaHorario, formatDuracao, isFimDeSemana } from "@/lib/horas";
-import { rowKey, type Evento, type HoraExtraRow } from "@/components/hora-extra/types";
+import { toneText } from "@/lib/tone";
+import { SEM_LIDER, rowKey, type Evento, type HoraExtraRow } from "@/components/hora-extra/types";
 
 function Checkbox({
   checked,
@@ -126,8 +127,15 @@ export function EventoCard({
 
             <p className="mt-0.5 truncate text-2xs text-muted-foreground">
               {evento.descrdep || `Setor ${evento.coddep}`} • solicitado por{" "}
-              {evento.nomeSolicitante || "—"}
+              {evento.souSolicitante ? "você" : evento.nomeSolicitante || "—"}
             </p>
+            {/* De quem cobrar: os colaboradores desta programação que dependem
+                de outro líder e ainda não foram liberados. */}
+            {evento.lideresPendentes.length > 0 && (
+              <p className="mt-0.5 truncate text-2xs text-muted-foreground" title="Você não aprova estes — cobre o líder responsável.">
+                aguarda aprovação de {evento.lideresPendentes.join(", ")}
+              </p>
+            )}
           </div>
         </button>
 
@@ -243,7 +251,16 @@ export function EventoCard({
                     <p className="truncate text-sm text-foreground">{r.nomefunc}</p>
                     <p className="text-2xs text-muted-foreground">
                       Matrícula {r.codfunc}
-                      {r.nomeSupervisor ? ` • supervisor ${r.nomeSupervisor}` : ""}
+                      {r.nomeSupervisor ? (
+                        ` • líder ${r.nomeSupervisor}`
+                      ) : (
+                        <>
+                          {" • "}
+                          <span className={toneText.warning} title="Sem supervisor em TFPFUN.USUVPJSUP. Quem lançou a programação pode aprovar.">
+                            {SEM_LIDER}
+                          </span>
+                        </>
+                      )}
                     </p>
                   </div>
 

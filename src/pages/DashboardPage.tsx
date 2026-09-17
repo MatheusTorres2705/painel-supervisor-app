@@ -47,6 +47,7 @@ import { resumoMno } from "@/lib/mnoCalc";
 import { farolOpe } from "@/lib/opeConfig";
 import { agruparPorLinhaEBarco, porGravidade } from "@/lib/listaFaltas";
 import { MESES_LONGO, dataOracle, isDiaUtil, isoLocal, pad2, ultimoDia } from "@/lib/datetime";
+import { useCalendario } from "@/hooks/useCalendario";
 import { num, toBR } from "@/lib/format";
 import { mensagemErro } from "@/lib/sankhyaRetorno";
 import type { Tone } from "@/lib/tone";
@@ -112,10 +113,12 @@ function useConsulta<T>(carregar: () => Promise<T>, deps: unknown[]): Consulta<T
 /* ── Utilitários de data ─────────────────────────────────────── */
 const DIAS_SEMANA = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"];
 
-/** Último dia útil (seg–sex) antes de `d`. */
-function diaUtilAnterior(d: Date): Date {
+/** Último dia útil (seg–sex, sem feriado) antes de `d`. */
+function diaUtilAnterior(d: Date, feriados: ReadonlySet<string>): Date {
   const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
-  while (!isDiaUtil(x)) x.setDate(x.getDate() - 1);
+  /* Teto de 30 dias: um calendário torto (ou um ano inteiro marcado como
+     feriado) não pode virar laço infinito na home. */
+  for (let i = 0; i < 30 && !isDiaUtil(x, feriados); i++) x.setDate(x.getDate() - 1);
   return x;
 }
 
@@ -165,7 +168,9 @@ export default function DashboardPage() {
   const mesFuturo = new Date(ano, mes - 1, 1) > hoje;
   const ateHoje = dataOracle(fimMesDate < hoje ? fimMesDate : hoje);
 
-  const diaAnt = useMemo(() => diaUtilAnterior(hoje), [hoje]);
+  const anosCal = useMemo(() => [...new Set([ano, hoje.getFullYear()])], [ano, hoje]);
+  const cal = useCalendario(anosCal);
+  const diaAnt = useMemo(() => diaUtilAnterior(hoje, cal.feriados), [hoje, cal.feriados]);
   const hojeIso = isoLocal(hoje);
   const diaAntIso = isoLocal(diaAnt);
 
@@ -177,12 +182,22 @@ export default function DashboardPage() {
   const materiais = useConsulta(() => getListaFaltas(ano, mes, sup), [ano, mes, sup, atualizacao]);
   const retrab = useConsulta(() => getRetrabalho(mm, mmAnt, sup), [mm, mmAnt, sup, atualizacao]);
   // Meta e OPE: visão da fábrica; não dependem do escopo.
-  const mno = useConsulta(
+  /* As linhas vêm do ERP; o resumo é conta de cliente. Separados de propósito:
+     quando o calendário de feriados chega, só a conta refaz — sem uma segunda
+     ida ao banco pelas mesmas linhas. */
+  const mnoRows = useConsulta(
     async () => {
       const [mesRows, diaRows] = await Promise.all([getRealizadoSetorMes(iniMes, fimMes), getRealizadoDiaSetor(iniMes, fimMes)]);
-      return resumoMno(mesRows, diaRows, ano, mes);
+      return { mesRows, diaRows };
     },
     [iniMes, fimMes, atualizacao]
+  );
+  const mno = useMemo(
+    () => ({
+      ...mnoRows,
+      dados: mnoRows.dados ? resumoMno(mnoRows.dados.mesRows, mnoRows.dados.diaRows, ano, mes, cal.feriados) : null,
+    }),
+    [mnoRows, ano, mes, cal.feriados]
   );
   const ope = useConsulta(
     async () => {
