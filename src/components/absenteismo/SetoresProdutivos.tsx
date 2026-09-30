@@ -198,7 +198,7 @@ export function SetoresProdutivos({
       <p className="px-1 text-2xs text-muted-foreground">
         Apuração {periodo}. <b>Pessoas</b> = quem esteve ativo em algum dia do período (<span className="font-mono">TFPFUN.DTADM/DTDEM</span>).
         <b> Faltante</b> = teve ao menos uma falta; <b>presente</b> = pessoas − faltantes; <b>% disponível</b> = presentes ÷ pessoas.
-        Setor produtivo vem de <span className="font-mono">AD_DEPLINHA.SETORMACRO</span>, e o galpão vem da linha do departamento — os mesmos caminhos do OPE.
+        Setor produtivo vem de <span className="font-mono">AD_DEPLINHA.SETORMACRO</span>, e o galpão vem da linha do departamento. Atenção: o OPE e a Daily passaram a usar outra base (setor do <span className="font-mono">TSIGRU</span> e galpão do <span className="font-mono">TPRPLP</span>), então os setores e galpões daqui não são os mesmos de lá.
         {galpao !== "todos" && <> Filtrado por <b>{galpaoLabel}</b>: entram as pessoas cujo departamento atende linhas desse galpão{foraDoGalpao > 0 ? `; ${int(foraDoGalpao)} sem linha de produção ${foraDoGalpao === 1 ? "ficou" : "ficaram"} de fora` : ""}.</>}
         {duplicados > 0 && (
           <> A soma das linhas dá {int(somaPessoas)} porque {int(duplicados)} {duplicados === 1 ? "pessoa está" : "pessoas estão"} em mais de um setor; o total conta cada uma uma vez.</>

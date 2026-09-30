@@ -6,11 +6,9 @@
 // reagrupa o que já veio do ERP — a consulta cobre a janela inteira.
 import type { Feriados } from "@/lib/calendario";
 import { isDiaUtil, isoLocal, pad2 } from "@/lib/datetime";
-import { galpaoDaLinha } from "@/lib/galpoes";
-import { resolveSetor, type Setor } from "@/lib/mnoConfig";
-import { SETORES_DAILY, galpaoMno } from "@/lib/dailyConfig";
+import { normSetor } from "@/lib/mnoConfig";
 import type { DadosSetorPeriodo } from "@/services/absenteismoService";
-import type { RawAtivRow, RawPontoRow } from "@/services/opeService";
+import { codPlpEfetivo, type GalpaoOpe, type GrupoProducao, type RawAtivRow, type RawPontoRow } from "@/services/opeService";
 import type { RealizadoDia } from "@/services/mnoService";
 
 /* ── Semana e janela ─────────────────────────────────────────── */
@@ -91,18 +89,18 @@ export type TotaisDia = { ponto: number; ativ: number; retrabalho: number };
 /**
  * Soma ponto, atividades e retrabalho por dia, no recorte.
  *
- * `linhas` nulo = todos os galpões; `setores` vazio = todos os setores macro.
- * Os setores marcados SOMAM entre si — é a consolidação que a daily de
- * Montagem + Acabamento precisa.
+ * `galpao` nulo = todos os galpões (CODPLP, já realocado pela SQL); `setores`
+ * vazio = todos os grupos de produção (CODGRUPO). Os setores marcados SOMAM
+ * entre si — é a consolidação que a daily de Montagem + Acabamento precisa.
  */
 export function totaisPorDia(
   ativos: RawAtivRow[],
   pontos: RawPontoRow[],
-  linhas: string[] | null,
+  galpao: string | null,
   setores: string[]
 ): Map<string, TotaisDia> {
-  const naLinha = (l: string) => linhas == null || linhas.includes(l);
-  const noSetor = (s: string) => setores.length === 0 || setores.includes(s);
+  const noRecorte = (r: { codPlp: string; codGrupo: string }) =>
+    (galpao == null || r.codPlp === galpao) && (setores.length === 0 || setores.includes(r.codGrupo));
   const acc = new Map<string, TotaisDia>();
   const pega = (dia: string) => {
     const t = acc.get(dia) ?? { ponto: 0, ativ: 0, retrabalho: 0 };
@@ -110,13 +108,13 @@ export function totaisPorDia(
     return t;
   };
   for (const r of ativos) {
-    if (!naLinha(r.linha) || !noSetor(r.setorMacro)) continue;
+    if (!noRecorte(r)) continue;
     const t = pega(r.data);
     t.ativ += r.horas;
     t.retrabalho += r.horasRetrabalho;
   }
   for (const r of pontos) {
-    if (!naLinha(r.linha) || !noSetor(r.setorMacro)) continue;
+    if (!noRecorte(r)) continue;
     pega(r.data).ponto += r.horasPonto;
   }
   return acc;
@@ -151,22 +149,40 @@ export function serieOpe(totais: Map<string, TotaisDia>, dias: string[], mesIni:
 
 /* ── Avanço (HH) ─────────────────────────────────────────────── */
 
-/** Setores da Meta de Produção correspondentes aos setores macro marcados. */
-export function setoresMnoDe(setores: string[]): Setor[] {
-  const alvo = setores.length ? SETORES_DAILY.filter((s) => setores.includes(s.id)) : SETORES_DAILY;
-  return [...new Set(alvo.flatMap((s) => s.setoresMno))];
-}
+/** As listas do banco que traduzem nomes (MNO) em códigos (OPE). */
+export type ListasDaily = { grupos: GrupoProducao[]; galpoes: GalpaoOpe[] };
 
-export function serieAvanco(rows: RealizadoDia[], recorte: Recorte, dias: string[], mesIni: string, mesFim: string): Serie {
+/**
+ * Avanço em HH no recorte.
+ *
+ * O realizado vem do MNO com o NOME do setor (TSIGRU.NOMEGRUPO) e do galpão
+ * (TPRPLP.NOME) — e sem a realocação de Componentes/Pintura/Mecânica que a SQL
+ * do OPE faz. Aqui cada linha vira código pelas listas do banco e passa pela
+ * mesma `codPlpEfetivo`: sem isso o Galpão Componente teria as horas de
+ * Componentes no OPE e zero no avanço.
+ *
+ * Fica fora o que o OPE também não conta: setor que não é grupo de produção e
+ * barco cujo modelo não cai num galpão da lista.
+ */
+export function serieAvanco(
+  rows: RealizadoDia[],
+  recorte: Recorte,
+  listas: ListasDaily,
+  dias: string[],
+  mesIni: string,
+  mesFim: string
+): Serie {
   const serie = serieVazia(dias);
-  const galpao = galpaoMno(recorte.galpao);
-  const alvos = new Set<string>(setoresMnoDe(recorte.setores));
+  const grupoPorNome = new Map(listas.grupos.map((g) => [normSetor(g.nome), g.codGrupo]));
+  const galpaoPorNome = new Map(listas.galpoes.map((g) => [normSetor(g.nome), g.codPlp]));
   let mes = 0;
   let temMes = false;
   for (const r of rows) {
-    if (galpao && r.galpao !== galpao) continue;
-    const setor = resolveSetor(r.setor);
-    if (!setor || !alvos.has(setor)) continue;
+    const codGrupo = grupoPorNome.get(normSetor(r.setor));
+    const codPlpBruto = galpaoPorNome.get(normSetor(r.galpao));
+    if (!codGrupo || !codPlpBruto) continue;
+    if (recorte.setores.length && !recorte.setores.includes(codGrupo)) continue;
+    if (recorte.galpao !== "todos" && codPlpEfetivo(codPlpBruto, codGrupo) !== recorte.galpao) continue;
     const dia = `${r.ano}-${pad2(r.mes)}-${pad2(r.dia)}`;
     if (dia >= mesIni && dia <= mesFim) {
       mes += r.horas;
@@ -187,9 +203,9 @@ const ativoNoDia = (p: { dtadm: string; dtdem: string }, dia: string) =>
 /**
  * % de absenteísmo do dia = faltantes ÷ ativos, no recorte.
  *
- * O galpão da pessoa vem da linha do departamento (a mesma regra da aba "Por
- * setor produtivo"): quem não tem linha fica de fora quando um galpão é
- * escolhido.
+ * Setor e galpão da pessoa vêm do departamento pelo mesmo caminho do ponto do
+ * OPE (TFPDEP.AD_CODGRUPO / AD_CODPLP, com a realocação) — ver
+ * `getDadosSetorPeriodo`. A aba do Absenteísmo usa outra base e não é esta conta.
  */
 export function serieAbsenteismo(
   dados: DadosSetorPeriodo | null,
@@ -201,11 +217,11 @@ export function serieAbsenteismo(
   const serie = serieVazia(dias);
   if (!dados) return serie;
   const todosGalpoes = recorte.galpao === "todos";
-  const noRecorte = (setor: string, linha: string | null) =>
+  const noRecorte = (setor: string, codPlp: string) =>
     (recorte.setores.length === 0 || recorte.setores.includes(setor)) &&
-    (todosGalpoes || galpaoDaLinha(linha)?.id === recorte.galpao);
+    (todosGalpoes || codPlp === recorte.galpao);
 
-  const pessoas = dados.quadro.filter((p) => noRecorte(p.setor, p.linha));
+  const pessoas = dados.quadro.filter((p) => noRecorte(p.setor, p.codPlp));
   const chavesNoRecorte = new Set(pessoas.map((p) => p.chave));
   const faltas = dados.faltas.filter((f) => chavesNoRecorte.has(f.chave));
 

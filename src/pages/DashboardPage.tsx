@@ -42,7 +42,7 @@ import { getOpsAvanco, pctAvanco, statusAvanco } from "@/services/opsService";
 import { getListaFaltas } from "@/services/comprasService";
 import { getRetrabalho } from "@/services/retrabalhoService";
 import { getRealizadoDiaSetor, getRealizadoSetorMes } from "@/services/mnoService";
-import { LINHAS_MAIORES_ARR, LINHAS_MENORES_ARR, agregar, getOpeDados, totaisOpe } from "@/services/opeService";
+import { agregar, getOpeDados, totaisOpe } from "@/services/opeService";
 import { resumoMno } from "@/lib/mnoCalc";
 import { farolOpe } from "@/lib/opeConfig";
 import { agruparPorLinhaEBarco, porGravidade } from "@/lib/listaFaltas";
@@ -496,9 +496,10 @@ export default function DashboardPage() {
           titulo={`fábrica · ${rotuloMes}`}
           ini={iniMes}
           fim={ateHoje}
-          // O mesmo universo de linhas que getOpeDados consulta para o card.
-          linhas={[...LINHAS_MENORES_ARR, ...LINHAS_MAIORES_ARR]}
-          setor={null}
+          // Recorte vazio = a fábrica inteira: o mesmo universo que getOpeDados
+          // soma para o card (todos os setores de produção, todos os galpões).
+          recorte={{}}
+          rotuloRecorte="fábrica inteira"
           abaInicial="ponto"
           totais={{ ponto: ope.dados.ponto, ativ: ope.dados.ativ, perdas: ope.dados.perdas, opePct: ope.dados.opePct }}
           onClose={() => setAuditarOpe(false)}

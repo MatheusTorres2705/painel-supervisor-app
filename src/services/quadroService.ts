@@ -10,7 +10,7 @@
 // casa os dois sem regra nova:
 //   TFPFUN.CODDEP → TFPDEP.AD_CODUSU → TSIUSU.CODGRUPO → TSIGRU.NOMEGRUPO
 import { obterReg } from "../lib/obterReg";
-import { SQL_LINHA_DO_PONTO } from "./opeService";
+import { SQL_LINHA_DO_PONTO_DEPLINHA as SQL_LINHA_DO_PONTO } from "@/services/depLinhaLegado";
 
 /** Uma pessoa × uma linha atendida pelo departamento dela. */
 export type QuadroPessoa = {

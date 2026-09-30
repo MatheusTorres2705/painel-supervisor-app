@@ -4,7 +4,8 @@
 // da tela — HH perdido ÷ HH disponível, com o escopo "meus colaboradores".
 import { obterReg } from "@/lib/obterReg";
 import { txt, type ErpRow } from "@/lib/format";
-import { SQL_LINHA_DO_PONTO } from "@/services/opeService";
+import { SQL_LINHA_DO_PONTO_DEPLINHA as SQL_LINHA_DO_PONTO } from "@/services/depLinhaLegado";
+import { SQL_CTE_DEP_SETOR, SQL_CTE_GALPAO } from "@/services/opeService";
 
 export const esc = (v: string) => v.replace(/'/g, "''");
 export const oracleData = (d: string) => `TO_DATE('${d}','DD/MM/YYYY')`;
@@ -259,7 +260,9 @@ ORDER BY v.DTREF DESC, v.NOMEFUNC
 
 /* ── Aba "Por setor produtivo" (só deste painel) ─────────────
    A view AD_VFALTA não conhece departamento: o setor vem do cadastro do
-   colaborador pelo caminho do OPE — TFPFUN.CODDEP → AD_DEPLINHA.SETORMACRO.
+   colaborador — TFPFUN.CODDEP → AD_DEPLINHA.SETORMACRO. Era o caminho do OPE;
+   o OPE mudou de base (TSIGRU/TPRPLP) e esta aba ficou na antiga por decisão
+   de escopo — ver services/depLinhaLegado.
    Duas consultas (quadro e faltas) agregadas no cliente, para o denominador
    incluir quem NÃO faltou, que a view não tem como mostrar.
 
@@ -360,12 +363,24 @@ GROUP BY NVL(DEPL.SETORMACRO, '${SEM_SETOR}'), F.CODEMP, V.CODFUNC, V.NOMEFUNC
    A aba "Por setor produtivo" olha o mês fechado; a daily precisa de cada dia
    da semana. Em vez de uma consulta por dia, trazemos as datas de admissão e
    demissão e as faltas datadas: quem está ativo em cada dia é conta de cliente
-   (lib/dailyCalc). */
+   (lib/dailyCalc).
+
+   Setor e galpão vêm do MESMO caminho que o ponto do OPE usa (TFPDEP.AD_CODGRUPO
+   e AD_CODPLP, com a realocação de Componentes/Pintura/Mecânica), pelos CTEs do
+   próprio opeService. A daily cruza OPE, avanço e absenteísmo no mesmo recorte:
+   se cada um resolvesse setor e galpão por um caminho, o mesmo chip filtraria
+   universos diferentes.
+
+   Os JOINs são INNER de propósito: fica fora quem não está num setor de
+   produção nem num galpão da lista — o mesmo universo das horas de ponto do OPE.
+   A aba do Absenteísmo NÃO usa esta consulta e segue no AD_DEPLINHA. */
 
 export type QuadroPessoaDia = {
+  /** CODGRUPO do setor de produção (TSIGRU). */
   setor: string;
   chave: string;
-  linha: string | null;
+  /** CODPLP do galpão, já realocado. */
+  codPlp: string;
   /** "YYYY-MM-DD" */
   dtadm: string;
   /** "YYYY-MM-DD" ou "" quando não há demissão. */
@@ -377,32 +392,40 @@ export type DadosSetorPeriodo = { quadro: QuadroPessoaDia[]; faltas: FaltaDia[] 
 /** @param ini,fim "DD/MM/YYYY" */
 export async function getDadosSetorPeriodo(ini: string, fim: string, sup: Sup): Promise<DadosSetorPeriodo> {
   const sqlQuadro = `
+WITH
+${SQL_CTE_GALPAO},
+${SQL_CTE_DEP_SETOR}
 SELECT DISTINCT
-  NVL(DEPL.SETORMACRO, '${SEM_SETOR}') AS SETOR,
+  DSE.CODGRUPO AS SETOR,
+  GL.CODPLP,
   F.CODEMP,
   F.CODFUNC,
-  CASE WHEN DEPL.CODPROJPAI IS NULL THEN NULL ELSE ${SQL_LINHA_DO_PONTO} END AS LINHA,
   TO_CHAR(F.DTADM, 'YYYY-MM-DD') AS DTADM,
   TO_CHAR(F.DTDEM, 'YYYY-MM-DD') AS DTDEM
 FROM TFPFUN F
-LEFT JOIN AD_DEPLINHA DEPL ON DEPL.CODDEP = F.CODDEP
+JOIN DEP_SETOR DSE ON DSE.CODDEP = F.CODDEP
+JOIN GALPAO GL     ON GL.CODPLP  = DSE.CODPLP
 WHERE TRUNC(F.DTADM) <= ${oracleData(fim)}
   AND (F.DTDEM IS NULL OR TRUNC(F.DTDEM) >= ${oracleData(ini)})${escopoFun("F", sup)}
 `.trim();
 
   const sqlFaltas = `
+WITH
+${SQL_CTE_GALPAO},
+${SQL_CTE_DEP_SETOR}
 SELECT
-  NVL(DEPL.SETORMACRO, '${SEM_SETOR}') AS SETOR,
+  DSE.CODGRUPO AS SETOR,
   F.CODEMP,
   V.CODFUNC,
   TO_CHAR(V.DTREF, 'YYYY-MM-DD') AS DIA,
   COUNT(*)          AS FALTAS,
   SUM(V.HH_PERDIDO) AS HH_PERDIDO
 FROM AD_VFALTA V
-JOIN TFPFUN F ON F.CODFUNC = V.CODFUNC
-LEFT JOIN AD_DEPLINHA DEPL ON DEPL.CODDEP = F.CODDEP
+JOIN TFPFUN F      ON F.CODFUNC  = V.CODFUNC
+JOIN DEP_SETOR DSE ON DSE.CODDEP = F.CODDEP
+JOIN GALPAO GL     ON GL.CODPLP  = DSE.CODPLP
 WHERE TRUNC(V.DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFun("F", sup)}
-GROUP BY NVL(DEPL.SETORMACRO, '${SEM_SETOR}'), F.CODEMP, V.CODFUNC, TO_CHAR(V.DTREF, 'YYYY-MM-DD')
+GROUP BY DSE.CODGRUPO, F.CODEMP, V.CODFUNC, TO_CHAR(V.DTREF, 'YYYY-MM-DD')
 `.trim();
 
   const [quadroRaw, faltasRaw] = await Promise.all([
@@ -412,14 +435,14 @@ GROUP BY NVL(DEPL.SETORMACRO, '${SEM_SETOR}'), F.CODEMP, V.CODFUNC, TO_CHAR(V.DT
 
   return {
     quadro: (quadroRaw as ErpRow[]).map((r) => ({
-      setor: txt(r.SETOR) || SEM_SETOR,
+      setor: txt(r.SETOR),
       chave: chavePessoa(r),
-      linha: txt(r.LINHA) || null,
+      codPlp: txt(r.CODPLP),
       dtadm: txt(r.DTADM),
       dtdem: txt(r.DTDEM),
     })),
     faltas: (faltasRaw as ErpRow[]).map((r) => ({
-      setor: txt(r.SETOR) || SEM_SETOR,
+      setor: txt(r.SETOR),
       chave: chavePessoa(r),
       dia: txt(r.DIA),
       faltas: numero(r.FALTAS),

@@ -5,15 +5,17 @@
 //
 // Cada bloco é independente: se o OPE falhar, o avanço e o absenteísmo seguem.
 import { getDadosSetorPeriodo, type DadosSetorPeriodo } from "@/services/absenteismoService";
-import { getOpeDados, type RawAtivRow, type RawPontoRow } from "@/services/opeService";
+import { getGalpoes, getGruposProducao, getOpeDados, type RawAtivRow, type RawPontoRow } from "@/services/opeService";
 import { getRealizadoDiaSetor, type RealizadoDia } from "@/services/mnoService";
 import { getResumoHoraExtra, type ResumoHoraExtraMes } from "@/services/horaExtraService";
 import { mensagemErro } from "@/lib/sankhyaRetorno";
-import { paraOracle } from "@/lib/dailyCalc";
+import { paraOracle, type ListasDaily } from "@/lib/dailyCalc";
 
 export type BlocoDaily<T> = { dados: T | null; erro: string | null };
 
 export type DadosDaily = {
+  /** Setores (TSIGRU) e galpões (TPRPLP) do recorte — a mesma lista do OPE. */
+  listas: BlocoDaily<ListasDaily>;
   ope: BlocoDaily<{ ativos: RawAtivRow[]; pontos: RawPontoRow[] }>;
   avanco: BlocoDaily<RealizadoDia[]>;
   absenteismo: BlocoDaily<DadosSetorPeriodo>;
@@ -42,11 +44,21 @@ export async function getDaily(
   mmAnt: string,
   supHoraExtra: number | null
 ): Promise<DadosDaily> {
-  const [ope, avanco, absenteismo, horaExtra] = await Promise.all([
-    bloco(() => getOpeDados(paraOracle(ini), paraOracle(fim)), "o OPE"),
+  const [listas, ope, avanco, absenteismo, horaExtra] = await Promise.all([
+    /* Bloco próprio, e não o que getOpeDados devolve: se o OPE falhar, o
+       recorte (e com ele o avanço e o absenteísmo) continua funcionando. As
+       duas listas são cacheadas na sessão — getOpeDados reusa o mesmo cache. */
+    bloco(async () => {
+      const [grupos, galpoes] = await Promise.all([getGruposProducao(), getGalpoes()]);
+      return { grupos, galpoes };
+    }, "os setores e galpões"),
+    bloco(async () => {
+      const { ativos, pontos } = await getOpeDados(paraOracle(ini), paraOracle(fim));
+      return { ativos, pontos };
+    }, "o OPE"),
     bloco(() => getRealizadoDiaSetor(paraOracle(ini), paraOracle(fim)), "o avanço"),
     bloco(() => getDadosSetorPeriodo(paraOracle(ini), paraOracle(fim), null), "o absenteísmo"),
     bloco(async () => (await getResumoHoraExtra(mm, mmAnt, supHoraExtra)).atual, "a hora extra"),
   ]);
-  return { ope, avanco, absenteismo, horaExtra };
+  return { listas, ope, avanco, absenteismo, horaExtra };
 }

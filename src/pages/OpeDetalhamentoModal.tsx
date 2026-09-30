@@ -41,16 +41,20 @@ import {
   META_OPE,
   OPE_ANOMALIA,
 } from "@/lib/opeConfig";
-import { GALPOES, faixaDe } from "@/lib/galpoes";
+import { faixaDe } from "@/lib/galpoes";
 import {
   getOpeDados,
   agregar,
   buildDailySeries,
+  gruposDoGalpao,
   totaisOpe,
   type AggRow,
   type DailyPoint,
+  type GalpaoOpe,
+  type GrupoProducao,
   type RawAtivRow,
   type RawPontoRow,
+  type RecorteOpe,
 } from "@/services/opeService";
 import {
   axisProps,
@@ -143,60 +147,56 @@ function LinkDetalhe({
  */
 const LINHAS_EM_MATURACAO: readonly string[] = ["NX620"];
 
-/** O galpão já com o filtro de maturação aplicado — `linhas` mutável. */
-type GalpaoFiltrado = { id: string; label: string; linhas: string[] };
+/** O que o filtro de escopo recebe: o registro de atividade ou de ponto. */
+type RegOpe = { linha: string; codPlp: string };
 
 /**
- * Os galpões com as linhas em maturação removidas, quando pedido. O filtro vale
- * para a tela INTEIRA, não só para o escopo do galpão. Galpão que ficasse vazio
- * sai da lista.
+ * Escopo da tela: Geral e um por galpão do TPRPLP (a lista vem do banco, não há
+ * mais lotação linha → galpão no código).
+ *
+ * O galpão de cada registro já chega corrigido pela SQL — inclusive a
+ * realocação de Componentes, Pintura e Mecânica. A linha só serve à lente de
+ * maturação, que vale para a tela INTEIRA: o Geral não filtra galpão (a SQL já
+ * restringe aos da lista), só tira as linhas ocultas.
  */
-function galpoesVisiveis(ocultar: boolean): GalpaoFiltrado[] {
-  return GALPOES.map((g) => ({
-    id: g.id,
-    label: g.label,
-    linhas: ocultar ? g.linhas.filter((l) => !LINHAS_EM_MATURACAO.includes(l)) : [...g.linhas],
-  })).filter((g) => g.linhas.length > 0);
-}
+type Escopo = { id: string; label: string; codPlp: string | null; fn: (r: RegOpe) => boolean };
 
-/**
- * Escopo da tela: Geral e um por galpão. O Geral filtra por lista explícita (e
- * não `() => true`) porque, com linha oculta, "tudo" deixa de ser todas as
- * linhas do banco.
- */
-function escoposDe(galpoes: GalpaoFiltrado[]) {
-  const todas = galpoes.flatMap((g) => g.linhas);
+function escoposDe(galpoes: GalpaoOpe[], ocultar: boolean): Escopo[] {
+  const visivel = (l: string) => !(ocultar && LINHAS_EM_MATURACAO.includes(l));
   return [
-    { id: "geral", label: "Geral", linhas: todas, fn: (l: string) => todas.includes(l) },
+    { id: "geral", label: "Geral", codPlp: null, fn: (r) => visivel(r.linha) },
     ...galpoes.map((g) => ({
-      id: g.id,
-      label: g.label,
-      linhas: g.linhas,
-      fn: (l: string) => g.linhas.includes(l),
+      id: g.codPlp,
+      label: g.nome,
+      codPlp: g.codPlp,
+      fn: (r: RegOpe) => r.codPlp === g.codPlp && visivel(r.linha),
     })),
   ];
 }
 
-type EscopoId = string;
-
-/* ── Opções de seleção dos gráficos ────────────────────────── */
-const OPCOES_SETOR_GRAF = [
-  { label: "Geral", sm: null as string | null },
-  { label: "Acab.", sm: "ACAB" },
-  { label: "Mont.", sm: "MONT" },
-  { label: "Marc.", sm: "MARC" },
-  { label: "Elét.", sm: "ELET" },
-  { label: "Lam.", sm: "LAM" },
-  { label: "Reb.", sm: "REB" },
-];
+/** Linhas que de fato aparecem em cada galpão no período — só para exibir a faixa. */
+function linhasPorGalpao(ativos: RawAtivRow[], pontos: RawPontoRow[]): Map<string, string[]> {
+  const m = new Map<string, Set<string>>();
+  for (const r of [...ativos, ...pontos]) {
+    if (!r.linha) continue;
+    const s = m.get(r.codPlp) ?? new Set<string>();
+    s.add(r.linha);
+    m.set(r.codPlp, s);
+  }
+  return new Map([...m].map(([k, v]) => [k, [...v].sort()]));
+}
 
 /* ── Drill-down ────────────────────────────────────────────── */
 
 /** Qual aba da auditoria a célula clicada abre: ponto, atividades ou perdas. */
 type TipoDetalhe = AbaAuditoria;
 
-/** Um recorte detalhável: o que abrir, em qual aba, e contra quais números conferir. */
-type Recorte = { label: string; linhas: string[]; setor: string | null; totais: TotaisAuditoria; tipo: TipoDetalhe };
+/**
+ * Um recorte detalhável: o que abrir, em qual aba, e contra quais números
+ * conferir. `recorte` vai para a SQL (códigos); `rotulo` vai para o subtítulo
+ * da auditoria (nomes).
+ */
+type Recorte = { label: string; recorte: RecorteOpe; rotulo: string; totais: TotaisAuditoria; tipo: TipoDetalhe };
 
 /** Célula numérica que abre a auditoria do seu recorte; sem recorte, só o conteúdo. */
 function CelulaDetalhe({
@@ -330,20 +330,6 @@ function OpeChart({ series, loading }: { series: DailyPoint[]; loading: boolean 
   );
 }
 
-/* ── Mapas para o popup de detalhe de ponto ────────────────── */
-const LABEL_TO_SETOR: Record<string, string> = {
-  Acabamento: "ACAB",
-  Montagem: "MONT",
-  Marcenaria: "MARC",
-  Elétrica: "ELET",
-  Laminação: "LAM",
-  Rebarba: "REB",
-};
-
-const OPE_LABEL_TO_LINHAS: Record<string, string[]> = Object.fromEntries(
-  GALPOES.map((g) => [g.label, [...g.linhas]])
-);
-
 /** Célula de OPE com farol contra a meta; acima de 100% é sinalizado, não verde. */
 function CelulaOpe({ valor }: { valor: number | null }) {
   if (valor == null) return <span className="text-muted-foreground/70">{DASH}</span>;
@@ -379,34 +365,48 @@ function Rotulo({ children, sub }: { children: React.ReactNode; sub?: string }) 
  */
 function MatrizSetorGalpao({
   porGalpao,
+  grupos,
+  excluirLinhas,
   loading,
   ini,
   fim,
   onDetalhe,
 }: {
-  porGalpao: { label: string; subtitulo?: string; linhas: AggRow[]; linhasArr: string[] }[];
+  porGalpao: { codPlp: string; label: string; subtitulo?: string; linhas: AggRow[] }[];
+  /** Ordem das linhas da matriz; setor que só existe nos dados entra no fim. */
+  grupos: GrupoProducao[];
+  /** Lente de maturação — vale para toda célula. */
+  excluirLinhas: string[];
   loading: boolean;
   ini?: string;
   fim?: string;
   onDetalhe: (r: Recorte) => void;
 }) {
-  const setoresLabels = porGalpao[0]?.linhas.map((l) => l.label) ?? [];
-  const todasLinhas = porGalpao.flatMap((g) => g.linhasArr);
+  /* O cruzamento é por CÓDIGO do grupo, não por nome: dois grupos de produção
+     com o mesmo NOMEGRUPO seriam somados numa linha só se a chave fosse o rótulo. */
+  const setores = useMemo(() => {
+    const presentes = new Map<string, string>();
+    for (const g of porGalpao) for (const l of g.linhas) if (l.codGrupo && !presentes.has(l.codGrupo)) presentes.set(l.codGrupo, l.label);
+    const ordem = grupos.map((g) => g.codGrupo).filter((c) => presentes.has(c));
+    const extras = [...presentes.keys()].filter((c) => !ordem.includes(c));
+    return [...ordem, ...extras].map((cod) => ({ cod, label: presentes.get(cod) ?? cod }));
+  }, [porGalpao, grupos]);
   const podeDetalhar = !!(ini && fim);
+  const sem = excluirLinhas.length ? ` · sem ${excluirLinhas.join(", ")}` : "";
 
   const opeDe = (l?: AggRow) => (l && l.horasReg > 0 ? (l.horas / l.horasReg) * 100 : null);
 
   /* Totais somam as horas e dividem — não é média dos setores, que daria peso
      igual a um setor de 8.000h e a outro de 900h. */
-  const linhasDoSetor = (label: string) =>
-    porGalpao.flatMap((g) => g.linhas.filter((x) => x.label === label));
+  const linhasDoSetor = (cod: string) =>
+    porGalpao.flatMap((g) => g.linhas.filter((x) => x.codGrupo === cod));
   const todas = porGalpao.flatMap((g) => g.linhas);
 
-  const recorte = (label: string, linhas: string[], setor: string | null, ls: AggRow[]): Recorte | null => {
+  const recorte = (label: string, rec: RecorteOpe, rotulo: string, ls: AggRow[]): Recorte | null => {
     if (!podeDetalhar) return null;
     const totais = totaisDeLinhas(ls);
     if (totais.ponto <= 0 && totais.ativ <= 0) return null;
-    return { label, linhas, setor, totais, tipo: "ponto" };
+    return { label, recorte: { ...rec, excluirLinhas }, rotulo: rotulo + sem, totais, tipo: "ponto" };
   };
 
   return (
@@ -432,22 +432,21 @@ function MatrizSetorGalpao({
           </thead>
           <tbody className="divide-y divide-border">
             {loading ? (
-              <SkeletonLinhas rows={6} cols={porGalpao.length + 2} />
+              <SkeletonLinhas rows={Math.max(6, grupos.length)} cols={porGalpao.length + 2} />
             ) : (
-              setoresLabels.map((label) => {
-                const setor = LABEL_TO_SETOR[label] ?? null;
-                const doSetor = linhasDoSetor(label);
-                const recSetor = setor ? recorte(label, todasLinhas, setor, doSetor) : null;
+              setores.map(({ cod, label }) => {
+                const doSetor = linhasDoSetor(cod);
+                const recSetor = recorte(label, { setor: cod }, `${label} · todos os galpões`, doSetor);
                 return (
-                  <tr key={label} className="hover:bg-muted/40">
+                  <tr key={cod} className="hover:bg-muted/40">
                     <td className={TD}>
                       <CelulaDetalhe recorte={recSetor} onAbrir={onDetalhe} title={`Auditar ${label} — todos os galpões`}>
                         {label}
                       </CelulaDetalhe>
                     </td>
                     {porGalpao.map((g) => {
-                      const l = g.linhas.find((x) => x.label === label);
-                      const rec = setor && l ? recorte(`${label} · ${g.label}`, g.linhasArr, setor, [l]) : null;
+                      const l = g.linhas.find((x) => x.codGrupo === cod);
+                      const rec = l ? recorte(`${label} · ${g.label}`, { setor: cod, codPlp: g.codPlp }, `${label} · ${g.label}`, [l]) : null;
                       return (
                         <td key={g.label} className={cn(TD, "tabular text-right")}>
                           <CelulaDetalhe recorte={rec} onAbrir={onDetalhe} title={`Auditar ${label} no ${g.label}`}>
@@ -472,13 +471,13 @@ function MatrizSetorGalpao({
                 <td className={TD}>Total</td>
                 {porGalpao.map((g) => (
                   <td key={g.label} className={cn(TD, "tabular text-right")}>
-                    <CelulaDetalhe recorte={recorte(g.label, g.linhasArr, null, g.linhas)} onAbrir={onDetalhe} title={`Auditar ${g.label} — todos os setores`}>
+                    <CelulaDetalhe recorte={recorte(g.label, { codPlp: g.codPlp }, `${g.label} · todos os setores`, g.linhas)} onAbrir={onDetalhe} title={`Auditar ${g.label} — todos os setores`}>
                       <CelulaOpe valor={totaisDeLinhas(g.linhas).opePct} />
                     </CelulaDetalhe>
                   </td>
                 ))}
                 <td className={cn(TD, "tabular text-right")}>
-                  <CelulaDetalhe recorte={recorte("Geral", todasLinhas, null, todas)} onAbrir={onDetalhe} title="Auditar o geral">
+                  <CelulaDetalhe recorte={recorte("Geral", {}, "fábrica inteira", todas)} onAbrir={onDetalhe} title="Auditar o geral">
                     <CelulaOpe valor={totaisDeLinhas(todas).opePct} />
                   </CelulaDetalhe>
                 </td>
@@ -504,7 +503,8 @@ function TabelaCard({
   loading,
   ini,
   fim,
-  linhasArr,
+  recorteBase,
+  rotuloBase,
 }: {
   titulo: string;
   /** Faixa de linhas do galpão, exibida junto do título. */
@@ -513,21 +513,20 @@ function TabelaCard({
   loading: boolean;
   ini?: string;
   fim?: string;
-  linhasArr?: string[];
+  /** O recorte do escopo (galpão + maturação); cada linha acrescenta o seu setor. */
+  recorteBase: RecorteOpe;
+  /** O escopo em palavras, para o subtítulo da auditoria. */
+  rotuloBase: string;
 }) {
   const [detalhe, setDetalhe] = useState<Recorte | null>(null);
 
-  /** Recorte (linhas + setor) da linha clicada; `null` = não detalhável. */
+  /** Recorte da linha clicada: o do escopo mais o setor dela. `null` = não detalhável. */
   function recorteDaLinha(l: AggRow, tipo: TipoDetalhe): Recorte | null {
-    if (!ini || !fim) return null;
-    const totais = totaisDeLinhas([l]);
-    const opeLinhas = OPE_LABEL_TO_LINHAS[l.label];
-    if (opeLinhas) return { label: l.label, linhas: opeLinhas, setor: null, totais, tipo };
-    if (linhasArr && LABEL_TO_SETOR[l.label]) return { label: l.label, linhas: linhasArr, setor: LABEL_TO_SETOR[l.label], totais, tipo };
-    return null;
+    if (!ini || !fim || !l.codGrupo) return null;
+    return { label: l.label, recorte: { ...recorteBase, setor: l.codGrupo }, rotulo: `${rotuloBase} · ${l.label}`, totais: totaisDeLinhas([l]), tipo };
   }
   const recorteTotal = (tipo: TipoDetalhe): Recorte | null =>
-    ini && fim && linhasArr ? { label: "Total", linhas: linhasArr, setor: null, totais: totaisDeLinhas(linhas), tipo } : null;
+    ini && fim ? { label: "Total", recorte: recorteBase, rotulo: rotuloBase, totais: totaisDeLinhas(linhas), tipo } : null;
 
   const totAtivH = linhas.reduce((s, l) => s + l.horas, 0);
   const totRetrabH = linhas.reduce((s, l) => s + l.horasRetrabalho, 0);
@@ -546,8 +545,8 @@ function TabelaCard({
           titulo={`${titulo} — ${detalhe.label}`}
           ini={ini}
           fim={fim}
-          linhas={detalhe.linhas}
-          setor={detalhe.setor}
+          recorte={detalhe.recorte}
+          rotuloRecorte={detalhe.rotulo}
           abaInicial={detalhe.tipo}
           totais={detalhe.totais}
           onClose={() => setDetalhe(null)}
@@ -666,26 +665,30 @@ function TabelaCard({
 /* ── Gráfico por seção ─────────────────────────────────────── */
 function GraficoCard({
   titulo,
-  filtroLinha,
+  filtro,
+  grupos,
   dadosAtiv,
   dadosPonto,
   loading,
 }: {
   titulo: string;
-  /** Filtro de linha do escopo selecionado na tela. */
-  filtroLinha: (l: string) => boolean;
+  /** Filtro do escopo selecionado na tela (galpão + maturação). */
+  filtro: (r: RegOpe) => boolean;
+  /** Setores que o escopo mostra — os chips do gráfico. */
+  grupos: GrupoProducao[];
   dadosAtiv: RawAtivRow[];
   dadosPonto: RawPontoRow[];
   loading: boolean;
 }) {
-  const [selecionado, setSelecionado] = useState("Geral");
+  /* `null` = Geral. Se o setor escolhido não existe no escopo novo (trocou de
+     galpão), o gráfico volta ao Geral em vez de mostrar uma série vazia. */
+  const [escolhido, setEscolhido] = useState<string | null>(null);
+  const selecionado = escolhido != null && grupos.some((g) => g.codGrupo === escolhido) ? escolhido : null;
 
   const series = useMemo(() => {
-    const opcao = OPCOES_SETOR_GRAF.find((o) => o.label === selecionado) ?? OPCOES_SETOR_GRAF[0];
-    const fl = (r: { linha: string; setorMacro: string }) =>
-      filtroLinha(r.linha) && (opcao.sm == null || r.setorMacro === opcao.sm);
+    const fl = (r: RegOpe & { codGrupo: string }) => filtro(r) && (selecionado == null || r.codGrupo === selecionado);
     return buildDailySeries(dadosAtiv, dadosPonto, fl, fl);
-  }, [dadosAtiv, dadosPonto, selecionado, filtroLinha]);
+  }, [dadosAtiv, dadosPonto, selecionado, filtro]);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -693,9 +696,12 @@ function GraficoCard({
       <Card>
         <CardContent className="flex flex-col p-3">
           <div className="mb-2 flex flex-wrap gap-1.5">
-            {OPCOES_SETOR_GRAF.map((o) => (
-              <Chip key={o.label} ativo={selecionado === o.label} onClick={() => setSelecionado(o.label)}>
-                {o.label}
+            <Chip ativo={selecionado == null} onClick={() => setEscolhido(null)}>
+              Geral
+            </Chip>
+            {grupos.map((g) => (
+              <Chip key={g.codGrupo} ativo={selecionado === g.codGrupo} onClick={() => setEscolhido(g.codGrupo)}>
+                {g.nome}
               </Chip>
             ))}
           </div>
@@ -719,7 +725,7 @@ export function OpeDetalhamentoModal() {
   );
   const reqId = useRef(0);
 
-  const [escopo, setEscopo] = useState<EscopoId>("geral");
+  const [escopo, setEscopo] = useState<string>("geral");
   /* Começa desligado: o OPE cheio é o número real da fábrica. Ocultar é uma
      lente para analisar, e quem a liga precisa saber que ligou. */
   const [ocultarMaturacao, setOcultarMaturacao] = useState(false);
@@ -730,13 +736,17 @@ export function OpeDetalhamentoModal() {
 
   const [dadosAtiv, setDadosAtiv] = useState<RawAtivRow[]>([]);
   const [dadosPonto, setDadosPonto] = useState<RawPontoRow[]>([]);
+  /* Setores (TSIGRU) e galpões (TPRPLP) vêm do banco junto com os dados. */
+  const [grupos, setGrupos] = useState<GrupoProducao[]>([]);
+  const [galpoesBanco, setGalpoesBanco] = useState<GalpaoOpe[]>([]);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
   /**
-   * Carga única da tela: 24 consultas. `reqId` descarta resposta de requisição
-   * vencida — dois períodos aplicados em seguida não pintam a tela com o
-   * anterior, se ele demorar mais para voltar.
+   * Carga única da tela: as listas de setores e de galpões (cacheadas na
+   * sessão) e, por setor, uma consulta de atividades e uma de ponto. `reqId`
+   * descarta resposta de requisição vencida — dois períodos aplicados em
+   * seguida não pintam a tela com o anterior, se ele demorar mais para voltar.
    */
   useEffect(() => {
     if (!periodo.ini || !periodo.fim) return;
@@ -744,10 +754,12 @@ export function OpeDetalhamentoModal() {
     setLoading(true);
     setErro(null);
     getOpeDados(periodo.ini, periodo.fim)
-      .then(({ ativos, pontos }) => {
+      .then(({ ativos, pontos, grupos: gs, galpoes: gps }) => {
         if (id !== reqId.current) return;
         setDadosAtiv(ativos);
         setDadosPonto(pontos);
+        setGrupos(gs);
+        setGalpoesBanco(gps);
       })
       .catch(() => {
         if (id === reqId.current) setErro("Falha ao carregar os dados");
@@ -757,28 +769,42 @@ export function OpeDetalhamentoModal() {
       });
   }, [periodo]);
 
-  const galpoes = useMemo(() => galpoesVisiveis(ocultarMaturacao), [ocultarMaturacao]);
-  const escopos = useMemo(() => escoposDe(galpoes), [galpoes]);
-
+  const escopos = useMemo(() => escoposDe(galpoesBanco, ocultarMaturacao), [galpoesBanco, ocultarMaturacao]);
   const escopoAtual = escopos.find((e) => e.id === escopo) ?? escopos[0];
   const filtroEscopo = escopoAtual.fn;
+  const excluirLinhas = useMemo(() => (ocultarMaturacao ? [...LINHAS_EM_MATURACAO] : []), [ocultarMaturacao]);
+  /** O escopo como recorte de SQL, para a auditoria abrir exatamente o que a tela soma. */
+  const recorteEscopo = useMemo<RecorteOpe>(
+    () => ({ codPlp: escopoAtual.codPlp, excluirLinhas }),
+    [escopoAtual.codPlp, excluirLinhas]
+  );
+  const rotuloEscopo = `${escopoAtual.codPlp == null ? "fábrica inteira" : escopoAtual.label}${excluirLinhas.length ? ` · sem ${excluirLinhas.join(", ")}` : ""}`;
+  const linhasGalpao = useMemo(() => linhasPorGalpao(dadosAtiv, dadosPonto), [dadosAtiv, dadosPonto]);
+
+  /* Setores que fazem sentido no escopo: o galpão de Componentes só mostra
+     Componentes, e os galpões de origem deixam de mostrar os setores que foram
+     realocados. Só muda o que APARECE — `agregar` põe no fim qualquer setor que
+     tenha dado, então nenhuma hora some da conta. */
+  const gruposEscopo = useMemo(() => gruposDoGalpao(escopoAtual.codPlp, grupos), [escopoAtual.codPlp, grupos]);
 
   /** Setores do escopo selecionado. */
   const setores = useMemo(
-    () => agregar(dadosAtiv, dadosPonto, filtroEscopo),
-    [dadosAtiv, dadosPonto, filtroEscopo]
+    () => agregar(dadosAtiv, dadosPonto, filtroEscopo, gruposEscopo),
+    [dadosAtiv, dadosPonto, filtroEscopo, gruposEscopo]
   );
 
   /** Setores × galpão, só na visão Geral. */
   const porGalpao = useMemo(() => {
     if (escopo !== "geral") return [];
-    return galpoes.map((g) => ({
-      label: g.label,
-      subtitulo: faixaDe(g.linhas),
-      linhas: agregar(dadosAtiv, dadosPonto, (l) => g.linhas.includes(l)),
-      linhasArr: g.linhas,
-    }));
-  }, [dadosAtiv, dadosPonto, escopo, galpoes]);
+    return escopos
+      .filter((e) => e.codPlp != null)
+      .map((e) => ({
+        codPlp: e.codPlp as string,
+        label: e.label,
+        subtitulo: faixaDe(linhasGalpao.get(e.codPlp as string) ?? []),
+        linhas: agregar(dadosAtiv, dadosPonto, e.fn, gruposDoGalpao(e.codPlp, grupos)),
+      }));
+  }, [dadosAtiv, dadosPonto, escopo, escopos, grupos, linhasGalpao]);
 
   /* Mesma função que a home da diretoria usa — ver `totaisOpe` em opeService. */
   const tot = useMemo(() => totaisOpe(setores), [setores]);
@@ -807,8 +833,8 @@ export function OpeDetalhamentoModal() {
           titulo={detalheGeral.label}
           ini={periodo.ini}
           fim={periodo.fim}
-          linhas={detalheGeral.linhas}
-          setor={detalheGeral.setor}
+          recorte={detalheGeral.recorte}
+          rotuloRecorte={detalheGeral.rotulo}
           abaInicial={detalheGeral.tipo}
           totais={detalheGeral.totais}
           onClose={() => setDetalheGeral(null)}
@@ -819,8 +845,8 @@ export function OpeDetalhamentoModal() {
           titulo={escopoAtual.label}
           ini={periodo.ini}
           fim={periodo.fim}
-          linhas={escopoAtual.linhas}
-          setor={null}
+          recorte={recorteEscopo}
+          rotuloRecorte={rotuloEscopo}
           abaInicial={auditoriaKpi}
           totais={{ ponto: tot.ponto, ativ: tot.ativ, perdas: tot.perdas, opePct: tot.opePct }}
           onClose={() => setAuditoriaKpi(null)}
@@ -841,8 +867,8 @@ export function OpeDetalhamentoModal() {
                 {e.label}
                 {/* A faixa no próprio botão: quem escolhe o galpão vê o que
                     está escolhendo, sem precisar decorar a lotação. */}
-                {e.id !== "geral" && (
-                  <span className="tabular font-normal opacity-70">{faixaDe(e.linhas)}</span>
+                {e.codPlp != null && (linhasGalpao.get(e.codPlp)?.length ?? 0) > 0 && (
+                  <span className="tabular font-normal opacity-70">{faixaDe(linhasGalpao.get(e.codPlp) ?? [])}</span>
                 )}
               </Chip>
             ))}
@@ -865,7 +891,9 @@ export function OpeDetalhamentoModal() {
           </div>
 
           <p className="tabular text-2xs text-muted-foreground">
-            {galpoes.map((g) => `${g.label}: ${g.linhas.join(", ")}`).join("  ·  ")}
+            {galpoesBanco
+              .map((g) => `${g.nome}: ${(linhasGalpao.get(g.codPlp) ?? []).join(", ") || "sem registro no período"}`)
+              .join("  ·  ")}
           </p>
         </CardContent>
       </Card>
@@ -949,17 +977,20 @@ export function OpeDetalhamentoModal() {
         <div className="flex min-w-0 flex-col gap-5">
           <TabelaCard
             titulo={`Setores — ${escopoAtual.label}`}
-            subtitulo={escopo === "geral" ? undefined : faixaDe(escopoAtual.linhas)}
+            subtitulo={escopoAtual.codPlp == null ? undefined : faixaDe(linhasGalpao.get(escopoAtual.codPlp) ?? [])}
             linhas={setores}
             loading={loading}
             ini={periodo.ini}
             fim={periodo.fim}
-            linhasArr={escopoAtual.linhas}
+            recorteBase={recorteEscopo}
+            rotuloBase={rotuloEscopo}
           />
 
           {escopo === "geral" && (
             <MatrizSetorGalpao
               porGalpao={porGalpao}
+              grupos={grupos}
+              excluirLinhas={excluirLinhas}
               loading={loading}
               ini={periodo.ini}
               fim={periodo.fim}
@@ -971,7 +1002,8 @@ export function OpeDetalhamentoModal() {
         <div className="min-w-0">
           <GraficoCard
             titulo={`OPE diário — ${escopoAtual.label}`}
-            filtroLinha={filtroEscopo}
+            filtro={filtroEscopo}
+            grupos={gruposEscopo}
             dadosAtiv={dadosAtiv}
             dadosPonto={dadosPonto}
             loading={loading}

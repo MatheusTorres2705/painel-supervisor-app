@@ -23,7 +23,7 @@
 //    onClick, sem teclado;
 //  · os formatadores vêm de lib/formatDiretoria (ver o cabeçalho de lá);
 //  · ABA "Por setor produtivo" (não existe lá): pessoas, presentes, faltantes e
-//    % disponível por setor macro do OPE (AD_DEPLINHA.SETORMACRO), no mês da
+//    % disponível por setor macro (AD_DEPLINHA.SETORMACRO — a base antiga do OPE), no mês da
 //    tela. A view AD_VFALTA não conhece departamento — o setor vem do cadastro
 //    do colaborador. A visão atual fica intacta na aba "Visão geral".
 import React from "react";

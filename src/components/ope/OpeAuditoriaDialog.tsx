@@ -18,6 +18,7 @@ import {
   getPontoDetalhe,
   type AtivDetalheRow,
   type PontoDetalheRow,
+  type RecorteOpe,
 } from "@/services/opeService";
 import { getOpsAvanco } from "@/services/opsService";
 import {
@@ -25,11 +26,13 @@ import {
   atividadesPorBarco,
   avancoPorBarco,
   conferencia,
+  semPontoPorColaborador,
   mesesDoPeriodo,
   pontoPorColaborador,
   type AvancoBarco,
   type BarcoAtividades,
   type ColaboradorPonto,
+  type ColaboradorSemPonto,
   type Conferencia,
 } from "@/lib/opeAuditoria";
 import { DASH, hoursHM, int, num, pct } from "@/lib/formatDiretoria";
@@ -122,12 +125,115 @@ function SeloConferencia({ c, unidade, explicacao }: { c: Conferencia | null; un
 
 type ColPonto = "nome" | "dias" | "horas" | "he";
 
+/**
+ * Quem não bateu ponto — AUDITORIA, fora de qualquer conta. Cada colaborador
+ * com os dias úteis (com expediente na fábrica) em que não houve batida.
+ */
+function TabelaSemPonto({ lista, busca, loading, arquivo }: { lista: ColaboradorSemPonto[]; busca: string; loading: boolean; arquivo: string }) {
+  const [abertos, setAbertos] = React.useState<Set<string>>(new Set());
+  const filtrada = React.useMemo(() => {
+    const termos = norm(busca).split(/\s+/).filter(Boolean);
+    return termos.length
+      ? lista.filter((c) => termos.every((t) => norm(`${c.codigo} ${c.nome} ${c.departamentos.join(" ")}`).includes(t)))
+      : lista;
+  }, [lista, busca]);
+  const somaDias = filtrada.reduce((s, c) => s + c.dias.length, 0);
+  const colunas: ExportColumn<ColaboradorSemPonto>[] = [
+    { id: "codigo", header: "Código", accessor: (c) => c.codigo },
+    { id: "nome", header: "Colaborador", accessor: (c) => c.nome },
+    { id: "departamento", header: "Departamento", accessor: (c) => c.departamentos.join(" / ") },
+    { id: "galpao", header: "Galpão", accessor: (c) => c.galpoes.join(" / ") },
+    { id: "qtd", header: "Dias sem ponto", accessor: (c) => c.dias.length },
+    { id: "dias", header: "Datas", accessor: (c) => c.dias.join(", ") },
+  ];
+  const alternar = (k: string) =>
+    setAbertos((s) => {
+      const n = new Set(s);
+      if (n.has(k)) n.delete(k); else n.add(k);
+      return n;
+    });
+
+  return (
+    <>
+      <div className="min-h-0 max-h-[52vh] overflow-auto rounded-lg border border-border scrollbar-slim">
+        <table className="w-full min-w-[36rem] text-sm">
+          <thead className="sticky top-0 z-10 bg-muted">
+            <tr>
+              <th className={TH}>Colaborador</th>
+              <th className={cn(TH, "hidden md:table-cell")}>Departamento</th>
+              <th className={cn(TH, "hidden sm:table-cell")}>Galpão</th>
+              <th className={cn(TH, "text-right")}>Dias sem ponto</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {loading ? (
+              <LinhasEsqueleto cols={4} />
+            ) : filtrada.length === 0 ? (
+              <tr><td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">{busca ? "Nenhum colaborador corresponde ao filtro." : "Todos do recorte bateram ponto nos dias com expediente."}</td></tr>
+            ) : (
+              filtrada.map((c) => {
+                const aberto = abertos.has(c.codigo);
+                const Chevron = aberto ? ChevronDown : ChevronRight;
+                return (
+                  <React.Fragment key={c.codigo}>
+                    <tr className="hover:bg-muted/40">
+                      <td className={TD}>
+                        <button
+                          type="button"
+                          onClick={() => alternar(c.codigo)}
+                          aria-expanded={aberto}
+                          className="flex items-start gap-1.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <Chevron className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                          <span>
+                            <span className="block font-medium text-foreground">{c.nome || DASH}</span>
+                            <span className="block text-2xs tabular text-muted-foreground">#{c.codigo}</span>
+                          </span>
+                        </button>
+                      </td>
+                      <td className={cn(TD, "hidden text-muted-foreground md:table-cell")}>{c.departamentos.join(" / ") || DASH}</td>
+                      <td className={cn(TD, "hidden text-muted-foreground sm:table-cell")}>{c.galpoes.join(" / ") || DASH}</td>
+                      <td className={cn(TD, "text-right font-semibold tabular text-warning")}>{int(c.dias.length)}</td>
+                    </tr>
+                    {aberto && (
+                      <tr className="bg-muted/30">
+                        <td colSpan={4} className="px-3 pb-3 pt-1">
+                          <div className="flex flex-wrap gap-1.5 pl-6">
+                            {c.dias.map((d) => (
+                              <span key={d} className="rounded-md border border-border bg-card px-2 py-0.5 text-2xs tabular">{d}</span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        <p className="text-2xs text-muted-foreground">
+          {!loading && <span className="tabular">{int(filtrada.length)} {filtrada.length === 1 ? "colaborador" : "colaboradores"} · {int(somaDias)} {somaDias === 1 ? "dia" : "dias"} sem batida · </span>}
+          Auditoria: não entra no OPE nem na conferência. Não separa férias e afastamentos — é "sem batida", não falta.
+        </p>
+        <Button size="sm" variant="outline" disabled={loading || filtrada.length === 0} onClick={() => exportTabela(colunas, filtrada, `sem-ponto_${arquivo}.xlsx`, "Sem ponto")}>
+          <Download className="h-4 w-4" /> Excel
+        </Button>
+      </div>
+    </>
+  );
+}
+
 function AbaPonto({ carga, totalCard, arquivo }: { carga: Carga<PontoDetalheRow>; totalCard?: number; arquivo: string }) {
   const [busca, setBusca] = React.useState("");
   const [ordem, setOrdem] = React.useState<Ordem<ColPonto>>({ col: "horas", dir: "desc" });
   const [abertos, setAbertos] = React.useState<Set<string>>(new Set());
 
+  const [vista, setVista] = React.useState<"com" | "sem">("com");
   const colaboradores = React.useMemo(() => pontoPorColaborador(carga.rows), [carga.rows]);
+  const semPonto = React.useMemo(() => semPontoPorColaborador(carga.rows), [carga.rows]);
   const lista = React.useMemo(() => {
     const termos = norm(busca).split(/\s+/).filter(Boolean);
     const filtrada = termos.length
@@ -150,6 +256,7 @@ function AbaPonto({ carga, totalCard, arquivo }: { carga: Carga<PontoDetalheRow>
     { id: "codigo", header: "Código", accessor: (c) => c.codigo },
     { id: "nome", header: "Colaborador", accessor: (c) => c.nome },
     { id: "departamento", header: "Departamento", accessor: (c) => c.departamentos.join(" / ") },
+    { id: "galpao", header: "Galpão", accessor: (c) => c.galpoes.join(" / ") },
     { id: "dias", header: "Dias com ponto", accessor: (c) => c.qtdDias },
     { id: "horas", header: "Horas de ponto", accessor: (c) => c.horasPonto },
     { id: "he", header: "Hora extra (h)", accessor: (c) => Number(c.heHoras.toFixed(2)) },
@@ -170,7 +277,23 @@ function AbaPonto({ carga, totalCard, arquivo }: { carga: Carga<PontoDetalheRow>
 
   return (
     <div className="flex min-h-0 flex-col gap-3">
-      <Busca value={busca} onChange={setBusca} placeholder="Filtrar colaborador ou departamento…" />
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex gap-1.5" role="group" aria-label="Quem listar">
+          <Chip ativo={vista === "com"} onClick={() => setVista("com")} title="Quem bateu ponto — é o que o card conta">
+            Com ponto{!carga.loading && ` · ${int(colaboradores.length)}`}
+          </Chip>
+          <Chip ativo={vista === "sem"} onClick={() => setVista("sem")} title="Do mesmo recorte, admitido e sem batida em dia com expediente — só auditoria">
+            Sem ponto{!carga.loading && ` · ${int(semPonto.length)}`}
+          </Chip>
+        </div>
+        <div className="min-w-[12rem] flex-1">
+          <Busca value={busca} onChange={setBusca} placeholder="Filtrar colaborador ou departamento…" />
+        </div>
+      </div>
+      {vista === "sem" ? (
+        <TabelaSemPonto lista={semPonto} busca={busca} loading={carga.loading} arquivo={arquivo} />
+      ) : (
+      <>
       <div className="min-h-0 max-h-[52vh] overflow-auto rounded-lg border border-border scrollbar-slim">
         <table className="w-full min-w-[40rem] text-sm">
           <thead className="sticky top-0 z-10 bg-muted">
@@ -247,7 +370,7 @@ function AbaPonto({ carga, totalCard, arquivo }: { carga: Carga<PontoDetalheRow>
               <SeloConferencia
                 c={conf}
                 unidade="h"
-                explicacao="O card soma o ponto por setor macro dos 6 setores do OPE. Departamento ligado a mais de um setor macro (AD_DEPLINHA) conta em cada um no card, e setor macro fora dos 6 entra aqui mas não no card."
+                explicacao="O card soma o ponto pelo setor do departamento (TFPDEP.AD_CODGRUPO) e pelo galpão (AD_CODPLP). Esta lista usa o mesmo caminho — e só quem bateu ponto: os sem ponto ficam fora da conta."
               />
             </>
           )}
@@ -256,6 +379,8 @@ function AbaPonto({ carga, totalCard, arquivo }: { carga: Carga<PontoDetalheRow>
           <Download className="h-4 w-4" /> Excel
         </Button>
       </div>
+      </>
+      )}
     </div>
   );
 }
@@ -342,6 +467,7 @@ function AbaAtividades({
   // Mesmas colunas da lista detalhada que a tela OPE exportava.
   const colunasDetalhe: ExportColumn<AtivDetalheRow>[] = [
     { id: "setorMacro", header: "Setor", accessor: (r) => r.setorMacro },
+    { id: "galpao", header: "Galpão", accessor: (r) => r.galpao },
     { id: "setor", header: "Equipe", accessor: (r) => r.setor },
     { id: "linha", header: "Linha", accessor: (r) => r.linha },
     { id: "projeto", header: "Barco", accessor: (r) => r.projeto },
@@ -462,7 +588,7 @@ function AbaAtividades({
               <SeloConferencia
                 c={conf}
                 unidade="h"
-                explicacao={`O card soma ${retrabalho ? "o retrabalho" : "as atividades"} por setor macro dos 6 setores do OPE; apontamento de equipe fora desses setores entra aqui mas não no card.`}
+                explicacao={`O card soma ${retrabalho ? "o retrabalho" : "as atividades"} pelo grupo de produção de quem apontou (TSIGRU) e pelo galpão do modelo do barco (TGFGRU.AD_CODPLP). Esta lista parte da mesma base, com o mesmo corte de apontamentos repetidos.`}
               />
             </>
           )}
@@ -486,8 +612,8 @@ export function OpeAuditoriaDialog({
   titulo,
   ini,
   fim,
-  linhas,
-  setor,
+  recorte,
+  rotuloRecorte,
   abaInicial = "ponto",
   totais,
   onClose,
@@ -497,8 +623,10 @@ export function OpeAuditoriaDialog({
   ini: string;
   /** "DD/MM/YYYY" */
   fim: string;
-  linhas: string[];
-  setor: string | null;
+  /** Galpão, setor (CODGRUPO) e linhas fora (maturação). `{}` = fábrica inteira. */
+  recorte: RecorteOpe;
+  /** Como o recorte aparece no subtítulo — nomes, não códigos. */
+  rotuloRecorte?: string;
   abaInicial?: Aba;
   /** Números do card clicado — base da conferência. */
   totais?: TotaisAuditoria;
@@ -511,7 +639,7 @@ export function OpeAuditoriaDialog({
   const [avanco, setAvanco] = React.useState<{ mapa: Map<string, AvancoBarco>; loading: boolean; erro: string | null; indisponivel: string | null; feito: boolean }>(
     { mapa: new Map(), loading: false, erro: null, indisponivel: null, feito: false }
   );
-  const chaveLinhas = linhas.join(",");
+  const chaveRecorte = JSON.stringify(recorte);
 
   // Descarta respostas só quando o diálogo fecha. Trocar de aba NÃO cancela:
   // a consulta da aba deixada termina e fica pronta para quando voltar.
@@ -527,20 +655,20 @@ export function OpeAuditoriaDialog({
   React.useEffect(() => {
     if (aba === "ponto" && !ponto.feito && !ponto.loading) {
       setPonto((c) => ({ ...c, loading: true }));
-      getPontoDetalhe(ini, fim, linhas, setor)
+      getPontoDetalhe(ini, fim, recorte)
         .then((rows) => montado.current && setPonto({ rows, loading: false, erro: null, feito: true }))
         .catch((e: unknown) => montado.current && setPonto({ rows: [], loading: false, erro: mensagemErro(e, "Falha ao carregar o ponto."), feito: true }));
     }
     if (aba === "ativ" || aba === "perdas") {
       if (aba === "ativ" && !ativ.feito && !ativ.loading) {
         setAtiv((c) => ({ ...c, loading: true }));
-        getAtivDetalhe(ini, fim, linhas, setor)
+        getAtivDetalhe(ini, fim, recorte)
           .then((rows) => montado.current && setAtiv({ rows, loading: false, erro: null, feito: true }))
           .catch((e: unknown) => montado.current && setAtiv({ rows: [], loading: false, erro: mensagemErro(e, "Falha ao carregar as atividades."), feito: true }));
       }
       if (aba === "perdas" && !perdas.feito && !perdas.loading) {
         setPerdas((c) => ({ ...c, loading: true }));
-        getAtivDetalhe(ini, fim, linhas, setor, true)
+        getAtivDetalhe(ini, fim, recorte, true)
           .then((rows) => montado.current && setPerdas({ rows, loading: false, erro: null, feito: true }))
           .catch((e: unknown) => montado.current && setPerdas({ rows: [], loading: false, erro: mensagemErro(e, "Falha ao carregar as perdas."), feito: true }));
       }
@@ -556,9 +684,9 @@ export function OpeAuditoriaDialog({
         }
       }
     }
-    // O recorte (ini, fim, linhas, setor) é fixo enquanto o diálogo está montado.
+    // O recorte (ini, fim, galpão, setor, maturação) é fixo enquanto o diálogo está montado.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aba, ini, fim, chaveLinhas, setor]);
+  }, [aba, ini, fim, chaveRecorte]);
 
   const farol = farolOpe(totais?.opePct ?? null);
   const arquivo = `${slugArquivo(titulo)}_${`${ini}_${fim}`.replace(/\//g, "-")}`;
@@ -570,7 +698,7 @@ export function OpeAuditoriaDialog({
           <DialogTitle>Auditoria do OPE — {titulo}</DialogTitle>
           <DialogDescription>
             {ini} a {fim}
-            {setor ? ` · setor ${setor}` : ""} · linhas {linhas.join(", ")}
+            {rotuloRecorte ? ` · ${rotuloRecorte}` : ""}
           </DialogDescription>
         </DialogHeader>
 

@@ -5,62 +5,59 @@
 // As metas vêm do quadro da parede e ficam versionadas aqui, como META_OPE
 // (lib/opeConfig) e as metas de HH (lib/mnoConfig). Mudar uma meta é editar
 // este arquivo; não há cadastro no ERP ainda.
-import { GALPOES } from "@/lib/galpoes";
-import { META_HH_GALPAO_SETOR, META_HH_POR_SETOR, type Galpao, type Setor } from "@/lib/mnoConfig";
+import {
+  META_HH_GALPAO_SETOR,
+  META_HH_POR_SETOR,
+  resolveGalpao,
+  resolveSetor,
+  type Setor,
+} from "@/lib/mnoConfig";
 import { META_OPE } from "@/lib/opeConfig";
 import { num, pct } from "@/lib/formatDiretoria";
 import type { Tone } from "@/lib/tone";
+import { ehGalpaoDestino, gruposDoGalpao, type GalpaoOpe, type GrupoProducao } from "@/services/opeService";
 
 /* ── Vocabulário do recorte ──────────────────────────────────── */
 
-/**
- * O eixo do recorte é o SETOR MACRO do OPE (opeService.SETORES_SQL): é o único
- * que as consultas de OPE, de retrabalho e de absenteísmo sabem filtrar.
- *
- * `setoresMno` liga cada macro aos setores da Meta de Produção (TSIGRU.NOMEGRUPO,
- * lista MNO_SETORES), que é de onde saem as horas de avanço e a meta em HH.
- *
- * PENDENTE DE VALIDAÇÃO COM O PCP: o mapa abaixo é a leitura mais direta dos
- * nomes. "Expedição", "Capotaria" e "Mecânica" não têm setor macro no OPE e
- * hoje ficam fora do avanço da daily — o quadro da parede tem uma linha de
- * avanço para Expedição, que entra quando o mapa for confirmado.
+/*
+ * O recorte usa o MESMO vocabulário do OPE: setor = grupo de produção do TSIGRU
+ * (CODGRUPO) e galpão = linha de produção do TPRPLP (CODPLP), as duas listas
+ * vindas do banco (opeService.getGruposProducao / getGalpoes). Não há lista fixa
+ * aqui. É o mesmo TSIGRU.NOMEGRUPO de onde a Meta de Produção tira o avanço, então
+ * OPE, avanço e absenteísmo filtram o mesmo universo com o mesmo chip.
  */
-export type SetorDaily = { id: string; label: string; setoresMno: Setor[] };
 
-export const SETORES_DAILY: SetorDaily[] = [
-  { id: "MONT", label: "Montagem", setoresMno: ["Montagem"] },
-  { id: "ACAB", label: "Acabamento", setoresMno: ["Acabamento", "Componentes"] },
-  { id: "MARC", label: "Marcenaria", setoresMno: ["Marcenaria (Pré)", "Marcenaria (Montagem)"] },
-  { id: "ELET", label: "Elétrica", setoresMno: ["Elétrica (Montagem)", "Elétrica (Chicotes)"] },
-  { id: "LAM", label: "Laminação", setoresMno: ["Laminação", "Pintura"] },
-  { id: "REB", label: "Rebarba", setoresMno: ["Rebarba"] },
-];
-
-export const SETORES_IDS = SETORES_DAILY.map((s) => s.id);
-export const labelSetor = (id: string) => SETORES_DAILY.find((s) => s.id === id)?.label ?? id;
-
-/** Atalhos: as dailies que acontecem juntas (mesmo supervisor). */
-export type GrupoDaily = { id: string; label: string; galpao: string | "todos"; setores: string[] };
+/**
+ * Atalhos: as dailies que acontecem juntas (mesmo supervisor).
+ *
+ * Declarados pelos setores da Meta de Produção (MNO_SETORES) e não por CODGRUPO:
+ * é assim que o painel já casa o NOMEGRUPO do banco (`resolveSetor`, que ignora
+ * acento, caixa e pontuação). Um atalho cujos setores não existam no banco
+ * simplesmente não aparece.
+ */
+export type GrupoDaily = { id: string; label: string; setoresMno: Setor[] };
 
 export const GRUPOS_DAILY: GrupoDaily[] = [
-  { id: "mont-acab", label: "Montagem + Acabamento", galpao: "todos", setores: ["MONT", "ACAB"] },
-  { id: "marc", label: "Marcenaria", galpao: "todos", setores: ["MARC"] },
-  { id: "lam-reb", label: "Laminação + Rebarba", galpao: "todos", setores: ["LAM", "REB"] },
-  { id: "elet", label: "Elétrica", galpao: "todos", setores: ["ELET"] },
+  { id: "mont-acab", label: "Montagem + Acabamento", setoresMno: ["Montagem", "Acabamento"] },
+  { id: "marc", label: "Marcenaria", setoresMno: ["Marcenaria (Pré)", "Marcenaria (Montagem)"] },
+  { id: "lam-reb", label: "Laminação + Rebarba", setoresMno: ["Laminação", "Rebarba"] },
+  { id: "elet", label: "Elétrica", setoresMno: ["Elétrica (Montagem)", "Elétrica (Chicotes)"] },
 ];
 
-/** Galpões do recorte, no vocabulário de lib/galpoes (id + linhas de produto). */
-export const GALPOES_DAILY = [{ id: "todos", label: "Todos os galpões", linhas: [] as string[] }, ...GALPOES.map((g) => ({ id: g.id, label: g.label, linhas: [...g.linhas] }))];
+/** Um atalho já traduzido para os CODGRUPO do banco. */
+export type AtalhoDaily = { id: string; label: string; setores: string[] };
 
-/**
- * O rótulo do galpão na Meta de Produção vem de `TPRPLP.NOME` ("Galpão 1"),
- * enquanto o recorte usa o id de lib/galpoes ("g1"). Os dois convivem no
- * projeto; a tradução mora aqui.
- */
-export function galpaoMno(id: string): Galpao | null {
-  const g = GALPOES.find((x) => x.id === id);
-  if (!g) return null;
-  return (["Galpão 1", "Galpão 2", "Galpão 3"] as Galpao[]).find((n) => n === g.label) ?? null;
+export function resolverAtalhos(grupos: GrupoProducao[]): AtalhoDaily[] {
+  return GRUPOS_DAILY.map((a) => ({
+    id: a.id,
+    label: a.label,
+    setores: grupos
+      .filter((g) => {
+        const s = resolveSetor(g.nome);
+        return s != null && a.setoresMno.includes(s);
+      })
+      .map((g) => g.codGrupo),
+  })).filter((a) => a.setores.length > 0);
 }
 
 /* ── Indicadores ─────────────────────────────────────────────── */
@@ -118,7 +115,7 @@ export const INDICADORES_DAILY: Indicador[] = [
   { id: "perdas", nome: "Perdas de produção", frequencia: "D", unidade: "h", melhor: "menor", fonte: "sem-fonte", meta: 100, observacao: "Definir a origem: é diferente de horas de retrabalho." },
   {
     id: "absenteismo", nome: "Absenteísmo", frequencia: "D", unidade: "%", melhor: "menor", fonte: "pronta", meta: 3, rota: "/absenteismo",
-    ajuda: "Faltantes do dia ÷ pessoas ativas no dia, no setor produtivo (AD_VFALTA × TFPFUN). Mesma base da aba Por setor produtivo.",
+    ajuda: "Faltantes do dia ÷ pessoas ativas no dia (AD_VFALTA × TFPFUN), com setor e galpão pelo mesmo caminho do ponto do OPE. Não é a base da aba Por setor produtivo do Absenteísmo.",
   },
   { id: "avaria", nome: "Avaria", frequencia: "M", unidade: "un", melhor: "menor", fonte: "sem-fonte", meta: 1000, observacao: "Sem tabela mapeada no Sankhya." },
   {
@@ -140,15 +137,35 @@ export const INDICADORES_DAILY: Indicador[] = [
  * têm meta fixa; a do mês é multiplicada pelos dias úteis quando faz sentido
  * somar (horas), e mantida quando é percentual.
  */
-export function metaDoDia(ind: Indicador, galpao: string, setores: string[], diasUteisMes: number): number | null {
+export function metaDoDia(
+  ind: Indicador,
+  galpao: GalpaoOpe | null,
+  setores: string[],
+  grupos: GrupoProducao[],
+  diasUteisMes: number
+): number | null {
   if (ind.id !== "avanco") return ind.meta;
-  const mno = galpaoMno(galpao);
-  /* Nenhum setor marcado = todos, o mesmo universo que `setoresMnoDe` soma no
-     realizado. Sem isto o quadro mostrava avanço sem meta ao abrir. */
-  const escolhidos = setores.length ? SETORES_DAILY.filter((s) => setores.includes(s.id)) : SETORES_DAILY;
-  const alvos = escolhidos.flatMap((s) => s.setoresMno);
-  if (alvos.length === 0 || diasUteisMes <= 0) return null;
-  const mensal = alvos.reduce((acc, s) => acc + (mno ? META_HH_GALPAO_SETOR[mno][s] : META_HH_POR_SETOR[s]), 0);
+  if (diasUteisMes <= 0) return null;
+  const codPlp = galpao?.codPlp ?? null;
+  /* Só os setores que o galpão comporta — a mesma regra de `gruposDoGalpao`
+     que decide o que a tela do OPE mostra. No galpão de Componentes, só
+     Componentes; nos galpões de origem, os setores realocados saem. Nenhum
+     setor marcado = todos os que o galpão comporta. */
+  const doGalpao = gruposDoGalpao(codPlp, grupos);
+  const escolhidos = setores.length ? doGalpao.filter((g) => setores.includes(g.codGrupo)) : doGalpao;
+  const mno = [...new Set(escolhidos.map((g) => resolveSetor(g.nome)).filter((s): s is Setor => s != null))];
+  if (mno.length === 0) return null;
+  /* A meta de HH é por galpão da Meta de Produção (1/2/3). Galpão de DESTINO de
+     realocação recebe o setor inteiro, então leva a meta total daquele setor;
+     galpão de origem usa a sua própria coluna; o Geral, a meta total. */
+  let mensal: number;
+  if (codPlp == null || ehGalpaoDestino(codPlp)) {
+    mensal = mno.reduce((acc, s) => acc + META_HH_POR_SETOR[s], 0);
+  } else {
+    const gm = resolveGalpao(galpao?.nome ?? "");
+    if (!gm) return null;
+    mensal = mno.reduce((acc, s) => acc + META_HH_GALPAO_SETOR[gm][s], 0);
+  }
   return mensal / diasUteisMes;
 }
 

@@ -25,9 +25,9 @@ import {
   farolDaily,
   metaDoDia,
   metaDoMes,
-  labelSetor,
-  GALPOES_DAILY,
+  resolverAtalhos,
 } from "@/lib/dailyConfig";
+import { gruposDoGalpao } from "@/services/opeService";
 import {
   diasUteisDoMes,
   diasUteisEntreIso,
@@ -42,7 +42,6 @@ import {
   type Recorte,
   type Serie,
 } from "@/lib/dailyCalc";
-import { GALPOES } from "@/lib/galpoes";
 import { anosDoIntervalo } from "@/lib/calendario";
 import { useCalendario } from "@/hooks/useCalendario";
 import { MESES_LONGO, isoLocal, pad2 } from "@/lib/datetime";
@@ -59,7 +58,11 @@ import { QuadroDaily, type LinhaQuadro } from "@/components/daily/QuadroDaily";
 import { SeletorRecorte } from "@/components/daily/SeletorRecorte";
 
 /* ── Recorte lembrado no navegador ───────────────────────────── */
-const CHAVE = "daily:recorte";
+/* v2: o recorte passou a guardar CODPLP/CODGRUPO do banco. A chave antiga
+   ("daily:recorte") tinha "g1"/"MONT", que não existem mais — ler aquilo
+   daria um filtro que não casa com nada. Mesmo na v2, o que não estiver nas
+   listas carregadas é descartado (ver `recorteEf`). */
+const CHAVE = "daily:recorte:v2";
 function lerRecorte(): Recorte {
   try {
     const raw = localStorage.getItem(CHAVE);
@@ -125,11 +128,36 @@ export default function DailyPage() {
 
   const atualizar = useCallback(() => setTick((t) => t + 1), []);
 
+  /* ── Recorte contra as listas do banco ───────────────────────── */
+  const listas = dados?.listas.dados ?? null;
+  const galpaoSel = useMemo(
+    () => listas?.galpoes.find((g) => g.codPlp === recorte.galpao) ?? null,
+    [listas, recorte.galpao]
+  );
+  /** Setores que o galpão escolhido comporta — a mesma regra da tela do OPE. */
+  const gruposGalpao = useMemo(
+    () => gruposDoGalpao(galpaoSel?.codPlp ?? null, listas?.grupos ?? []),
+    [galpaoSel, listas]
+  );
+  /* O recorte que as contas usam: galpão que não existe na lista vira "todos"
+     e setor que o galpão não comporta sai. Sem as listas ainda, nada é
+     descartado — só não há avanço para calcular. */
+  const recorteEf = useMemo<Recorte>(() => {
+    if (!listas) return recorte;
+    const validos = new Set(gruposGalpao.map((g) => g.codGrupo));
+    return { galpao: galpaoSel ? galpaoSel.codPlp : "todos", setores: recorte.setores.filter((s) => validos.has(s)) };
+  }, [listas, recorte, galpaoSel, gruposGalpao]);
+  const atalhos = useMemo(() => resolverAtalhos(listas?.grupos ?? []), [listas]);
+
+  /* Trocar de galpão poda os setores que o novo galpão não comporta: marcar
+     Montagem e ir ao galpão de Componentes não pode virar "todos" sem avisar. */
+  const escolherGalpao = (g: string) =>
+    trocarRecorte((r) => {
+      const validos = new Set(gruposDoGalpao(g === "todos" ? null : g, listas?.grupos ?? []).map((x) => x.codGrupo));
+      return { galpao: g, setores: listas ? r.setores.filter((s) => validos.has(s)) : r.setores };
+    });
+
   /* ── Séries ────────────────────────────────────────────────── */
-  const linhasGalpao = useMemo(() => {
-    if (recorte.galpao === "todos") return null;
-    return GALPOES.find((g) => g.id === recorte.galpao)?.linhas.slice() ?? null;
-  }, [recorte.galpao]);
 
   const anosCal = useMemo(() => anosDoIntervalo(diaLocal(janela.mesIni), diaLocal(janela.fim)), [janela.mesIni, janela.fim]);
   const cal = useCalendario(anosCal);
@@ -143,18 +171,18 @@ export default function DailyPage() {
   const series = useMemo(() => {
     const out: Record<string, Serie> = {};
     if (dados?.ope.dados) {
-      const totais = totaisPorDia(dados.ope.dados.ativos, dados.ope.dados.pontos, linhasGalpao, recorte.setores);
+      const totais = totaisPorDia(dados.ope.dados.ativos, dados.ope.dados.pontos, recorteEf.galpao === "todos" ? null : recorteEf.galpao, recorteEf.setores);
       const { ope, retrabalho } = serieOpe(totais, dias, janela.mesIni, mesFim);
       out.ope = ope;
       out.retrabalho = retrabalho;
     }
-    if (dados?.avanco.dados) out.avanco = serieAvanco(dados.avanco.dados, recorte, dias, janela.mesIni, mesFim);
-    if (dados?.absenteismo.dados) out.absenteismo = serieAbsenteismo(dados.absenteismo.dados, recorte, dias, diasUteisMes, mesFim);
+    if (dados?.avanco.dados && listas) out.avanco = serieAvanco(dados.avanco.dados, recorteEf, listas, dias, janela.mesIni, mesFim);
+    if (dados?.absenteismo.dados) out.absenteismo = serieAbsenteismo(dados.absenteismo.dados, recorteEf, dias, diasUteisMes, mesFim);
     if (dados?.horaExtra.dados) {
       out.horaextra = { porDia: Object.fromEntries(dias.map((d) => [d, null])), mes: dados.horaExtra.dados.aprovadosMin / 60 };
     }
     return out;
-  }, [dados, linhasGalpao, recorte, dias, janela.mesIni, mesFim, diasUteisMes]);
+  }, [dados, listas, recorteEf, dias, janela.mesIni, mesFim, diasUteisMes]);
 
   const erroDe = (id: string) =>
     id === "ope" || id === "retrabalho" ? dados?.ope.erro : id === "avanco" ? dados?.avanco.erro : id === "absenteismo" ? dados?.absenteismo.erro : id === "horaextra" ? dados?.horaExtra.erro : null;
@@ -162,7 +190,7 @@ export default function DailyPage() {
   const linhas: LinhaQuadro[] = useMemo(
     () =>
       INDICADORES_DAILY.map((ind) => {
-        const metaDia = metaDoDia(ind, recorte.galpao, recorte.setores, duTotal);
+        const metaDia = metaDoDia(ind, galpaoSel, recorteEf.setores, listas?.grupos ?? [], duTotal);
         return {
           ind,
           serie: series[ind.id] ?? null,
@@ -175,7 +203,7 @@ export default function DailyPage() {
     // já carregam o calendário, mas `cal.feriados` fica explícito para a memo não
     // congelar no valor sem feriado.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [series, recorte, duTotal, duDecorridos, dados, cal.feriados]
+    [series, recorteEf, galpaoSel, listas, duTotal, duDecorridos, dados, cal.feriados]
   );
 
   /* Fora da meta no dia de hoje (ou no último dia da semana escolhida). */
@@ -188,7 +216,8 @@ export default function DailyPage() {
   const comFonte = linhas.filter((l) => l.ind.fonte === "pronta").length;
   const semFonte = INDICADORES_DAILY.length - comFonte;
 
-  const rotuloRecorte = `${GALPOES_DAILY.find((g) => g.id === recorte.galpao)?.label ?? ""} · ${recorte.setores.length ? recorte.setores.map(labelSetor).join(" + ") : "todos os setores"}`;
+  const nomeSetor = (cod: string) => listas?.grupos.find((g) => g.codGrupo === cod)?.nome ?? cod;
+  const rotuloRecorte = `${galpaoSel?.nome ?? "Todos os galpões"} · ${recorteEf.setores.length ? recorteEf.setores.map(nomeSetor).join(" + ") : "todos os setores"}`;
 
   const filtros = (
     <div className="flex flex-wrap items-center gap-2">
@@ -220,7 +249,18 @@ export default function DailyPage() {
       icon={<ClipboardList className="h-6 w-6" />}
       onRefresh={atualizar}
       status={loading ? "atualizando…" : undefined}
-      actions={<SeletorRecorte galpao={recorte.galpao} setores={recorte.setores} onGalpao={(g) => trocarRecorte((r) => ({ ...r, galpao: g }))} onSetores={(s) => trocarRecorte((r) => ({ ...r, setores: s }))} />}
+      actions={
+        <SeletorRecorte
+              galpao={recorteEf.galpao}
+              setores={recorteEf.setores}
+              galpoes={listas?.galpoes ?? []}
+              grupos={gruposGalpao}
+              atalhos={atalhos}
+              carregando={loading}
+              onGalpao={escolherGalpao}
+              onSetores={(s) => trocarRecorte((r) => ({ ...r, setores: s }))}
+        />
+      }
     >
       <div className="space-y-6">
         {!apresentando && (
@@ -239,9 +279,13 @@ export default function DailyPage() {
             }
           >
             <SeletorRecorte
-              galpao={recorte.galpao}
-              setores={recorte.setores}
-              onGalpao={(g) => trocarRecorte((r) => ({ ...r, galpao: g }))}
+              galpao={recorteEf.galpao}
+              setores={recorteEf.setores}
+              galpoes={listas?.galpoes ?? []}
+              grupos={gruposGalpao}
+              atalhos={atalhos}
+              carregando={loading}
+              onGalpao={escolherGalpao}
               onSetores={(s) => trocarRecorte((r) => ({ ...r, setores: s }))}
             />
           </PageHeader>
@@ -263,9 +307,10 @@ export default function DailyPage() {
           </div>
         )}
 
-        {dados && (dados.ope.erro || dados.avanco.erro || dados.absenteismo.erro || dados.horaExtra.erro) && (
+        {dados && (dados.listas.erro || dados.ope.erro || dados.avanco.erro || dados.absenteismo.erro || dados.horaExtra.erro) && (
           <Alert variant="warning" title="Parte do quadro não carregou">
-            {[dados.ope.erro, dados.avanco.erro, dados.absenteismo.erro, dados.horaExtra.erro].filter(Boolean).join(" · ")} Os demais indicadores continuam válidos.
+            {[dados.listas.erro, dados.ope.erro, dados.avanco.erro, dados.absenteismo.erro, dados.horaExtra.erro].filter(Boolean).join(" · ")} Os demais indicadores continuam válidos.
+            {dados.listas.erro && " Sem a lista de setores e galpões, o recorte fica em todos e o avanço não é calculado."}
           </Alert>
         )}
 

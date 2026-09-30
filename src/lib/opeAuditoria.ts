@@ -19,6 +19,7 @@ export type ColaboradorPonto = {
   codigo: string;
   nome: string;
   departamentos: string[];
+  galpoes: string[];
   dias: DiaPonto[];
   qtdDias: number;
   horasPonto: number;
@@ -30,13 +31,20 @@ export type ColaboradorPonto = {
 /**
  * Um colaborador por linha. O detalhe traz uma linha por colaborador × dia
  * (× departamento, se houver mais de um) — o dia conta uma vez só.
+ *
+ * As linhas `semPonto` são DESCARTADAS aqui dentro, e não por quem chama: esta
+ * soma é a que confere contra o card, e o card só conta quem bateu ponto. Se a
+ * filtragem ficasse com o chamador, esquecê-la uma vez faria a conferência
+ * acusar uma diferença que não existe.
  */
 export function pontoPorColaborador(rows: PontoDetalheRow[]): ColaboradorPonto[] {
-  const porCodigo = new Map<string, { nome: string; deps: Set<string>; dias: Map<string, number> }>();
+  const porCodigo = new Map<string, { nome: string; deps: Set<string>; galpoes: Set<string>; dias: Map<string, number> }>();
   for (const r of rows) {
+    if (r.semPonto) continue;
     const k = r.codigo || r.nome;
-    const e = porCodigo.get(k) ?? { nome: r.nome, deps: new Set<string>(), dias: new Map<string, number>() };
+    const e = porCodigo.get(k) ?? { nome: r.nome, deps: new Set<string>(), galpoes: new Set<string>(), dias: new Map<string, number>() };
     if (r.departamento) e.deps.add(r.departamento);
+    if (r.galpao) e.galpoes.add(r.galpao);
     // HE já vem por (colaborador, dia): repetir o dia (outro departamento) não soma de novo.
     e.dias.set(r.data, Math.max(e.dias.get(r.data) ?? 0, r.heHoras || 0));
     porCodigo.set(k, e);
@@ -47,6 +55,7 @@ export function pontoPorColaborador(rows: PontoDetalheRow[]): ColaboradorPonto[]
       codigo,
       nome: e.nome,
       departamentos: [...e.deps].sort(),
+      galpoes: [...e.galpoes].sort(),
       dias,
       qtdDias: dias.length,
       horasPonto: dias.length * HORAS_POR_DIA_PONTO,
@@ -55,6 +64,46 @@ export function pontoPorColaborador(rows: PontoDetalheRow[]): ColaboradorPonto[]
       ultimoDia: dias[dias.length - 1]?.data ?? "",
     };
   });
+}
+
+/* ── Quem não bateu ponto ────────────────────────────────────── */
+
+/**
+ * Colaborador do recorte que estava admitido e não teve batida válida em um
+ * dia útil com expediente na fábrica (as linhas `SEM_PONTO` do detalhe).
+ *
+ * É AUDITORIA, fora de qualquer conta: não entra no OPE, na tabela nem na
+ * conferência. Não separa férias e afastamento — é "sem batida", não falta.
+ */
+export type ColaboradorSemPonto = {
+  codigo: string;
+  nome: string;
+  departamentos: string[];
+  galpoes: string[];
+  /** "DD/MM/YYYY", em ordem. */
+  dias: string[];
+};
+
+export function semPontoPorColaborador(rows: PontoDetalheRow[]): ColaboradorSemPonto[] {
+  const porCodigo = new Map<string, { nome: string; deps: Set<string>; galpoes: Set<string>; dias: Set<string> }>();
+  for (const r of rows) {
+    if (!r.semPonto) continue;
+    const k = r.codigo || r.nome;
+    const e = porCodigo.get(k) ?? { nome: r.nome, deps: new Set<string>(), galpoes: new Set<string>(), dias: new Set<string>() };
+    if (r.departamento) e.deps.add(r.departamento);
+    if (r.galpao) e.galpoes.add(r.galpao);
+    e.dias.add(r.data);
+    porCodigo.set(k, e);
+  }
+  return [...porCodigo.entries()]
+    .map(([codigo, e]) => ({
+      codigo,
+      nome: e.nome,
+      departamentos: [...e.deps].sort(),
+      galpoes: [...e.galpoes].sort(),
+      dias: [...e.dias].sort((a, b) => ts(a) - ts(b)),
+    }))
+    .sort((a, b) => b.dias.length - a.dias.length || a.nome.localeCompare(b.nome, "pt-BR"));
 }
 
 /* ── Atividades ──────────────────────────────────────────────── */
