@@ -40,6 +40,7 @@ import { norm } from "@/lib/tabela";
 import { farolOpe, META_OPE, OPE_FAROL_CLS } from "@/lib/opeConfig";
 import { mensagemErro } from "@/lib/sankhyaRetorno";
 import { cn } from "@/lib/utils";
+import { toneText } from "@/lib/tone";
 import { exportTabela, slugArquivo, type ExportColumn } from "@/components/ui/table-export";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -143,6 +144,7 @@ function TabelaSemPonto({ lista, busca, loading, arquivo }: { lista: Colaborador
     { id: "nome", header: "Colaborador", accessor: (c) => c.nome },
     { id: "departamento", header: "Departamento", accessor: (c) => c.departamentos.join(" / ") },
     { id: "galpao", header: "Galpão", accessor: (c) => c.galpoes.join(" / ") },
+    { id: "emprestado", header: "Emprestado de", accessor: (c) => c.emprestadoDe.join(" / ") },
     { id: "qtd", header: "Dias sem ponto", accessor: (c) => c.dias.length },
     { id: "dias", header: "Datas", accessor: (c) => c.dias.join(", ") },
   ];
@@ -188,6 +190,11 @@ function TabelaSemPonto({ lista, busca, loading, arquivo }: { lista: Colaborador
                           <span>
                             <span className="block font-medium text-foreground">{c.nome || DASH}</span>
                             <span className="block text-2xs tabular text-muted-foreground">#{c.codigo}</span>
+                            {c.emprestadoDe.length > 0 && (
+                              <span className={cn("block text-2xs", toneText.info)} title="Estava emprestado para este recorte (AD_EMPRESTFUN): nesses dias o ponto conta aqui, não no departamento de casa.">
+                                emprestado de {c.emprestadoDe.join(" / ")}
+                              </span>
+                            )}
                           </span>
                         </button>
                       </td>
@@ -257,6 +264,8 @@ function AbaPonto({ carga, totalCard, arquivo }: { carga: Carga<PontoDetalheRow>
     { id: "nome", header: "Colaborador", accessor: (c) => c.nome },
     { id: "departamento", header: "Departamento", accessor: (c) => c.departamentos.join(" / ") },
     { id: "galpao", header: "Galpão", accessor: (c) => c.galpoes.join(" / ") },
+    { id: "emprestado", header: "Emprestado de", accessor: (c) => c.emprestadoDe.join(" / ") },
+    { id: "diasEmprestado", header: "Dias emprestado", accessor: (c) => c.diasEmprestado },
     { id: "dias", header: "Dias com ponto", accessor: (c) => c.qtdDias },
     { id: "horas", header: "Horas de ponto", accessor: (c) => c.horasPonto },
     { id: "he", header: "Hora extra (h)", accessor: (c) => Number(c.heHoras.toFixed(2)) },
@@ -329,6 +338,12 @@ function AbaPonto({ carga, totalCard, arquivo }: { carga: Carga<PontoDetalheRow>
                           <span>
                             <span className="block font-medium text-foreground">{c.nome || DASH}</span>
                             <span className="block text-2xs tabular text-muted-foreground">#{c.codigo}</span>
+                            {c.emprestadoDe.length > 0 && (
+                              <span className={cn("block text-2xs", toneText.info)} title="Estava emprestado para este recorte (AD_EMPRESTFUN): nesses dias o ponto conta aqui, não no departamento de casa.">
+                                emprestado de {c.emprestadoDe.join(" / ")}
+                                {` · ${int(c.diasEmprestado)} ${c.diasEmprestado === 1 ? "dia" : "dias"}`}
+                              </span>
+                            )}
                           </span>
                         </button>
                       </td>

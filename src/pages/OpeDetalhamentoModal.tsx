@@ -738,6 +738,9 @@ export function OpeDetalhamentoModal() {
   const [dadosPonto, setDadosPonto] = useState<RawPontoRow[]>([]);
   /* Setores (TSIGRU) e galpões (TPRPLP) vêm do banco junto com os dados. */
   const [grupos, setGrupos] = useState<GrupoProducao[]>([]);
+  /* Preenchido quando a conta com empréstimo de colaborador falhou e o ponto
+     saiu sem empréstimos (rede de segurança do opeService). */
+  const [avisoEmprestimo, setAvisoEmprestimo] = useState<string | null>(null);
   const [galpoesBanco, setGalpoesBanco] = useState<GalpaoOpe[]>([]);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -754,8 +757,9 @@ export function OpeDetalhamentoModal() {
     setLoading(true);
     setErro(null);
     getOpeDados(periodo.ini, periodo.fim)
-      .then(({ ativos, pontos, grupos: gs, galpoes: gps }) => {
+      .then(({ ativos, pontos, grupos: gs, galpoes: gps, avisoEmprestimo: aviso }) => {
         if (id !== reqId.current) return;
+        setAvisoEmprestimo(aviso);
         setDadosAtiv(ativos);
         setDadosPonto(pontos);
         setGrupos(gs);
@@ -897,6 +901,12 @@ export function OpeDetalhamentoModal() {
           </p>
         </CardContent>
       </Card>
+
+      {avisoEmprestimo && !loading ? (
+        <Alert variant="warning" title="Empréstimos de colaborador fora da conta">
+          {avisoEmprestimo}
+        </Alert>
+      ) : null}
 
       {erro ? (
         <Alert variant="destructive" title={erro}>

@@ -20,6 +20,13 @@ export type ColaboradorPonto = {
   nome: string;
   departamentos: string[];
   galpoes: string[];
+  /**
+   * Departamentos de CASA, quando a pessoa estava emprestada para este recorte
+   * (AD_EMPRESTFUN) — é por isso que alguém de fora aparece no setor.
+   */
+  emprestadoDe: string[];
+  /** Quantos dos dias contados aqui eram de empréstimo. */
+  diasEmprestado: number;
   dias: DiaPonto[];
   qtdDias: number;
   horasPonto: number;
@@ -38,13 +45,17 @@ export type ColaboradorPonto = {
  * acusar uma diferença que não existe.
  */
 export function pontoPorColaborador(rows: PontoDetalheRow[]): ColaboradorPonto[] {
-  const porCodigo = new Map<string, { nome: string; deps: Set<string>; galpoes: Set<string>; dias: Map<string, number> }>();
+  const porCodigo = new Map<string, { nome: string; deps: Set<string>; galpoes: Set<string>; casa: Set<string>; diasEmp: Set<string>; dias: Map<string, number> }>();
   for (const r of rows) {
     if (r.semPonto) continue;
     const k = r.codigo || r.nome;
-    const e = porCodigo.get(k) ?? { nome: r.nome, deps: new Set<string>(), galpoes: new Set<string>(), dias: new Map<string, number>() };
+    const e = porCodigo.get(k) ?? { nome: r.nome, deps: new Set<string>(), galpoes: new Set<string>(), casa: new Set<string>(), diasEmp: new Set<string>(), dias: new Map<string, number>() };
     if (r.departamento) e.deps.add(r.departamento);
     if (r.galpao) e.galpoes.add(r.galpao);
+    if (r.emprestadoDe) {
+      e.casa.add(r.emprestadoDe);
+      e.diasEmp.add(r.data);
+    }
     // HE já vem por (colaborador, dia): repetir o dia (outro departamento) não soma de novo.
     e.dias.set(r.data, Math.max(e.dias.get(r.data) ?? 0, r.heHoras || 0));
     porCodigo.set(k, e);
@@ -56,6 +67,8 @@ export function pontoPorColaborador(rows: PontoDetalheRow[]): ColaboradorPonto[]
       nome: e.nome,
       departamentos: [...e.deps].sort(),
       galpoes: [...e.galpoes].sort(),
+      emprestadoDe: [...e.casa].sort(),
+      diasEmprestado: e.diasEmp.size,
       dias,
       qtdDias: dias.length,
       horasPonto: dias.length * HORAS_POR_DIA_PONTO,
@@ -80,18 +93,21 @@ export type ColaboradorSemPonto = {
   nome: string;
   departamentos: string[];
   galpoes: string[];
+  /** Departamentos de casa, se a falta caiu em dia de empréstimo para este recorte. */
+  emprestadoDe: string[];
   /** "DD/MM/YYYY", em ordem. */
   dias: string[];
 };
 
 export function semPontoPorColaborador(rows: PontoDetalheRow[]): ColaboradorSemPonto[] {
-  const porCodigo = new Map<string, { nome: string; deps: Set<string>; galpoes: Set<string>; dias: Set<string> }>();
+  const porCodigo = new Map<string, { nome: string; deps: Set<string>; galpoes: Set<string>; casa: Set<string>; dias: Set<string> }>();
   for (const r of rows) {
     if (!r.semPonto) continue;
     const k = r.codigo || r.nome;
-    const e = porCodigo.get(k) ?? { nome: r.nome, deps: new Set<string>(), galpoes: new Set<string>(), dias: new Set<string>() };
+    const e = porCodigo.get(k) ?? { nome: r.nome, deps: new Set<string>(), galpoes: new Set<string>(), casa: new Set<string>(), dias: new Set<string>() };
     if (r.departamento) e.deps.add(r.departamento);
     if (r.galpao) e.galpoes.add(r.galpao);
+    if (r.emprestadoDe) e.casa.add(r.emprestadoDe);
     e.dias.add(r.data);
     porCodigo.set(k, e);
   }
@@ -101,6 +117,7 @@ export function semPontoPorColaborador(rows: PontoDetalheRow[]): ColaboradorSemP
       nome: e.nome,
       departamentos: [...e.deps].sort(),
       galpoes: [...e.galpoes].sort(),
+      emprestadoDe: [...e.casa].sort(),
       dias: [...e.dias].sort((a, b) => ts(a) - ts(b)),
     }))
     .sort((a, b) => b.dias.length - a.dias.length || a.nome.localeCompare(b.nome, "pt-BR"));

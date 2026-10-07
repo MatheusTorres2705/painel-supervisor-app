@@ -5,7 +5,7 @@
 import { obterReg } from "@/lib/obterReg";
 import { txt, type ErpRow } from "@/lib/format";
 import { SQL_LINHA_DO_PONTO_DEPLINHA as SQL_LINHA_DO_PONTO } from "@/services/depLinhaLegado";
-import { SQL_CTE_DEP_SETOR, SQL_CTE_GALPAO } from "@/services/opeService";
+import { SQL_CTE_DEP_SETOR, SQL_CTE_GALPAO, emprestimoDisponivel, sqlCteEmprestimo } from "@/services/opeService";
 
 export const esc = (v: string) => v.replace(/'/g, "''");
 export const oracleData = (d: string) => `TO_DATE('${d}','DD/MM/YYYY')`;
@@ -387,14 +387,30 @@ export type QuadroPessoaDia = {
   dtdem: string;
 };
 export type FaltaDia = { setor: string; chave: string; dia: string; faltas: number; hhPerdido: number };
-export type DadosSetorPeriodo = { quadro: QuadroPessoaDia[]; faltas: FaltaDia[] };
+/**
+ * Empréstimo APROVADO que toca a janela, com o setor e o galpão do destino.
+ * Destino fora da produção vem com `setor`/`codPlp` vazios: nesses dias a
+ * pessoa sai do recorte de casa e não entra em nenhum outro — como no ponto do OPE.
+ */
+export type EmprestimoDia = { chave: string; codEmprest: number; dtini: string; dtfim: string; setor: string; codPlp: string };
+export type DadosSetorPeriodo = { quadro: QuadroPessoaDia[]; faltas: FaltaDia[]; emprestimos: EmprestimoDia[] };
 
 /** @param ini,fim "DD/MM/YYYY" */
 export async function getDadosSetorPeriodo(ini: string, fim: string, sup: Sup): Promise<DadosSetorPeriodo> {
+  /* Com empréstimo, entra também quem MORA fora da produção mas foi emprestado
+     para ela: só conta nos dias emprestados (lib/dailyCalc decide por dia). Sem
+     empréstimo, o LEFT JOIN + "galpão encontrado" é exatamente o INNER JOIN de
+     antes. */
+  const comEmprestimo = await emprestimoDisponivel();
+  const emp = comEmprestimo ? `,\n${sqlCteEmprestimo(ini, fim)}` : "";
+  const entra = comEmprestimo
+    ? `(GL.CODPLP IS NOT NULL OR EXISTS (SELECT 1 FROM EMP_APROV E WHERE E.CODEMP = F.CODEMP AND E.CODFUNC = F.CODFUNC))`
+    : `GL.CODPLP IS NOT NULL`;
+
   const sqlQuadro = `
 WITH
 ${SQL_CTE_GALPAO},
-${SQL_CTE_DEP_SETOR}
+${SQL_CTE_DEP_SETOR}${emp}
 SELECT DISTINCT
   DSE.CODGRUPO AS SETOR,
   GL.CODPLP,
@@ -403,16 +419,17 @@ SELECT DISTINCT
   TO_CHAR(F.DTADM, 'YYYY-MM-DD') AS DTADM,
   TO_CHAR(F.DTDEM, 'YYYY-MM-DD') AS DTDEM
 FROM TFPFUN F
-JOIN DEP_SETOR DSE ON DSE.CODDEP = F.CODDEP
-JOIN GALPAO GL     ON GL.CODPLP  = DSE.CODPLP
+LEFT JOIN DEP_SETOR DSE ON DSE.CODDEP = F.CODDEP
+LEFT JOIN GALPAO GL     ON GL.CODPLP  = DSE.CODPLP
 WHERE TRUNC(F.DTADM) <= ${oracleData(fim)}
   AND (F.DTDEM IS NULL OR TRUNC(F.DTDEM) >= ${oracleData(ini)})${escopoFun("F", sup)}
+  AND ${entra}
 `.trim();
 
   const sqlFaltas = `
 WITH
 ${SQL_CTE_GALPAO},
-${SQL_CTE_DEP_SETOR}
+${SQL_CTE_DEP_SETOR}${emp}
 SELECT
   DSE.CODGRUPO AS SETOR,
   F.CODEMP,
@@ -421,16 +438,37 @@ SELECT
   COUNT(*)          AS FALTAS,
   SUM(V.HH_PERDIDO) AS HH_PERDIDO
 FROM AD_VFALTA V
-JOIN TFPFUN F      ON F.CODFUNC  = V.CODFUNC
-JOIN DEP_SETOR DSE ON DSE.CODDEP = F.CODDEP
-JOIN GALPAO GL     ON GL.CODPLP  = DSE.CODPLP
+JOIN TFPFUN F           ON F.CODFUNC  = V.CODFUNC
+LEFT JOIN DEP_SETOR DSE ON DSE.CODDEP = F.CODDEP
+LEFT JOIN GALPAO GL     ON GL.CODPLP  = DSE.CODPLP
 WHERE TRUNC(V.DTREF) BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}${escopoFun("F", sup)}
+  AND ${entra}
 GROUP BY DSE.CODGRUPO, F.CODEMP, V.CODFUNC, TO_CHAR(V.DTREF, 'YYYY-MM-DD')
 `.trim();
 
-  const [quadroRaw, faltasRaw] = await Promise.all([
+  /* Destino fora da produção fica com setor/galpão nulos (LEFT JOIN): a pessoa
+     sai do recorte de casa nesses dias e não entra em outro. */
+  const sqlEmprestimos = `
+WITH
+${SQL_CTE_GALPAO},
+${SQL_CTE_DEP_SETOR}${emp}
+SELECT
+  E.CODEMPREST,
+  E.CODEMP,
+  E.CODFUNC,
+  TO_CHAR(E.DTINI, 'YYYY-MM-DD') AS DTINI,
+  TO_CHAR(E.DTFIM, 'YYYY-MM-DD') AS DTFIM,
+  DSE.CODGRUPO AS SETOR,
+  GL.CODPLP
+FROM EMP_APROV E
+LEFT JOIN DEP_SETOR DSE ON DSE.CODDEP = E.CODDEPDEST
+LEFT JOIN GALPAO GL     ON GL.CODPLP  = DSE.CODPLP
+`.trim();
+
+  const [quadroRaw, faltasRaw, empRaw] = await Promise.all([
     obterReg(sqlQuadro, { pageSize: 5000, maxPages: 10 }),
     obterReg(sqlFaltas, { pageSize: 5000, maxPages: 10 }),
+    comEmprestimo ? obterReg(sqlEmprestimos, { pageSize: 5000, maxPages: 2 }) : Promise.resolve([]),
   ]);
 
   return {
@@ -447,6 +485,14 @@ GROUP BY DSE.CODGRUPO, F.CODEMP, V.CODFUNC, TO_CHAR(V.DTREF, 'YYYY-MM-DD')
       dia: txt(r.DIA),
       faltas: numero(r.FALTAS),
       hhPerdido: numero(r.HH_PERDIDO),
+    })),
+    emprestimos: (empRaw as ErpRow[]).map((r) => ({
+      chave: chavePessoa(r),
+      codEmprest: numero(r.CODEMPREST),
+      dtini: txt(r.DTINI),
+      dtfim: txt(r.DTFIM),
+      setor: txt(r.SETOR),
+      codPlp: txt(r.CODPLP),
     })),
   };
 }

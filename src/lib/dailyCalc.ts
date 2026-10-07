@@ -7,7 +7,7 @@
 import type { Feriados } from "@/lib/calendario";
 import { isDiaUtil, isoLocal, pad2 } from "@/lib/datetime";
 import { normSetor } from "@/lib/mnoConfig";
-import type { DadosSetorPeriodo } from "@/services/absenteismoService";
+import type { DadosSetorPeriodo, EmprestimoDia } from "@/services/absenteismoService";
 import { codPlpEfetivo, type GalpaoOpe, type GrupoProducao, type RawAtivRow, type RawPontoRow } from "@/services/opeService";
 import type { RealizadoDia } from "@/services/mnoService";
 
@@ -217,24 +217,57 @@ export function serieAbsenteismo(
   const serie = serieVazia(dias);
   if (!dados) return serie;
   const todosGalpoes = recorte.galpao === "todos";
+  /* Setor e galpão vazios = fora da produção (quem só entrou no quadro por
+     causa de um empréstimo, nos dias em que não está emprestado). */
   const noRecorte = (setor: string, codPlp: string) =>
+    setor !== "" &&
+    codPlp !== "" &&
     (recorte.setores.length === 0 || recorte.setores.includes(setor)) &&
     (todosGalpoes || codPlp === recorte.galpao);
 
-  const pessoas = dados.quadro.filter((p) => noRecorte(p.setor, p.codPlp));
-  const chavesNoRecorte = new Set(pessoas.map((p) => p.chave));
-  const faltas = dados.faltas.filter((f) => chavesNoRecorte.has(f.chave));
+  /* Empréstimo aprovado manda no dia: nele a pessoa conta no setor e no galpão
+     de destino, como no ponto do OPE. Dois cobrindo o mesmo dia (não deveria
+     acontecer) → vale o de maior código, a mesma regra da SQL. */
+  const emprestimosDe = new Map<string, EmprestimoDia[]>();
+  for (const e of dados.emprestimos) {
+    const lista = emprestimosDe.get(e.chave) ?? [];
+    lista.push(e);
+    emprestimosDe.set(e.chave, lista);
+  }
+  const ondeEsta = (p: { chave: string; setor: string; codPlp: string }, dia: string) => {
+    let vale: EmprestimoDia | null = null;
+    for (const e of emprestimosDe.get(p.chave) ?? []) {
+      if (e.dtini <= dia && dia <= e.dtfim && (!vale || e.codEmprest > vale.codEmprest)) vale = e;
+    }
+    return vale ? { setor: vale.setor, codPlp: vale.codPlp } : { setor: p.setor, codPlp: p.codPlp };
+  };
+  const pessoaPorChave = new Map(dados.quadro.map((p) => [p.chave, p]));
 
-  const faltantesPorDia = new Map<string, Set<string>>();
-  for (const f of faltas) {
-    const s2 = faltantesPorDia.get(f.dia) ?? new Set<string>();
+  const faltasPorDia = new Map<string, Set<string>>();
+  for (const f of dados.faltas) {
+    const s2 = faltasPorDia.get(f.dia) ?? new Set<string>();
     s2.add(f.chave);
-    faltantesPorDia.set(f.dia, s2);
+    faltasPorDia.set(f.dia, s2);
   }
 
+  /* O recorte é decidido POR DIA: com empréstimo, a mesma pessoa está no setor
+     num dia e fora dele no outro. Sem empréstimo, é o recorte de casa — a
+     conta de antes. */
   const doDia = (dia: string) => {
-    const ativos = pessoas.filter((p) => ativoNoDia(p, dia)).length;
-    return { ativos, faltantes: faltantesPorDia.get(dia)?.size ?? 0 };
+    let ativos = 0;
+    for (const p of dados.quadro) {
+      if (!ativoNoDia(p, dia)) continue;
+      const onde = ondeEsta(p, dia);
+      if (noRecorte(onde.setor, onde.codPlp)) ativos++;
+    }
+    let faltantes = 0;
+    for (const chave of faltasPorDia.get(dia) ?? []) {
+      const p = pessoaPorChave.get(chave);
+      if (!p) continue;
+      const onde = ondeEsta(p, dia);
+      if (noRecorte(onde.setor, onde.codPlp)) faltantes++;
+    }
+    return { ativos, faltantes };
   };
 
   /* Dia que ainda não aconteceu fica vazio: sem falta lançada ele daria 0% —

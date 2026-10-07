@@ -6,6 +6,7 @@ import {
   ClipboardList,
   Gauge,
   Grid3x3,
+  HandHelping,
   Home,
   ListChecks,
   KanbanSquare,
@@ -41,6 +42,7 @@ export const navItems: NavItem[] = [
   { path: "/calendario", label: "Calendário", icon: CalendarDays, hint: "Agenda de entregas" },
   { path: "/hora-extra", label: "Hora Extra", icon: Timer, hint: "Aprovação de horas extras" },
   { path: "/absenteismo", label: "Absenteísmo", icon: UserX, hint: "Faltas, HH perdido e reincidência" },
+  { path: "/emprestimos", label: "Empréstimo de colaborador", icon: HandHelping, hint: "Emprestar gente entre setores — conta no OPE do destino" },
   { path: "/plano-acao", label: "Plano de Ação", icon: KanbanSquare, hint: "Quadro de ações" },
 ];
 

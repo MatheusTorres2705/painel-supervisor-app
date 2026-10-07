@@ -2,9 +2,11 @@
 // Camada de dados do Detalhamento OPE: SQL de atividades (AD_COMPONENTECRONO/AD_APOAVANCO),
 // SQL de ponto (AD_BATPONTO) e as derivações usadas pela tela.
 //
-// Cópia do painel-diretoria no commit 5313b2a3 (setor pelo TSIGRU, galpão
-// pelo TPRPLP, realocação de Componentes/Pintura/Mecânica e a auditoria de
-// quem não bateu ponto). Diferenças em relação à cópia:
+// Cópia do painel-diretoria no commit a8973ac7 (setor pelo TSIGRU, galpão
+// pelo TPRPLP, realocação de Componentes/Pintura/Mecânica/Elétrica Chicotes e
+// a auditoria de quem não bateu ponto), mais o EMPRÉSTIMO DE COLABORADOR
+// (AD_EMPRESTFUN), aplicado nos dois painéis pelo mesmo script para a SQL do
+// ponto sair igual. Diferenças em relação à cópia:
 //  1. obterReg mora em lib/obterReg e não é genérico (import e chamadas sem <T>).
 //  2. buildSqlAtivDetalhe USA `apenasRetrabalho` na SQL — lá o parâmetro é
 //     recebido e ignorado. A aba Perdas da auditoria depende dele.
@@ -15,7 +17,9 @@
 //        do MNO, que não realoca);
 //      - `SQL_CTE_GALPAO` e `SQL_CTE_DEP_SETOR` — o setor e o galpão do
 //        colaborador, para o absenteísmo da Daily contar o mesmo universo do
-//        ponto do OPE.
+//        ponto do OPE;
+//      - `sqlCteEmprestimo` — os empréstimos aprovados da janela, pelo mesmo
+//        filtro do ponto, para a falta num dia emprestado ir para o destino.
 //  4. A expressão ANTIGA de linha do departamento (AD_DEPLINHA.CODPROJPAI) não
 //     mora mais aqui: o Absenteísmo e o quadro de pessoas da Meta de Produção,
 //     que continuam na base antiga, a importam de services/depLinhaLegado.
@@ -99,7 +103,8 @@ const SQL_CTE_SETOR_MACRO = `SETOR_MACRO AS (
 )`;
 
 /* ── Realocação de galpão por setor ──────────────────────────
-   Exceção de cadastro: COMPONENTES, PINTURA e MECANICA trabalham em galpões próprios,
+   Exceção de cadastro: COMPONENTES, PINTURA, MECANICA e ELÉTRICA (CHICOTES)
+   trabalham em galpões próprios,
    mas os departamentos (AD_CODPLP) e os modelos dos barcos (TGFGRU.AD_CODPLP)
    os deixam nos galpões 2, 3 e 4. Aqui o que é desses setores nesses galpões
    é levado para o galpão certo.
@@ -111,6 +116,7 @@ const REALOCACAO_GALPAO: readonly { codGrupo: number; de: readonly number[]; par
   { codGrupo: 31, de: [2, 3, 4], para: 5 },   // COMPONENTES → GALPAO COMPONENTE
   { codGrupo: 24, de: [2, 3, 4], para: 7 },   // PINTURA     → GALPAO PINTURA
   { codGrupo: 33, de: [2, 3, 4], para: 6 },   // MECANICA    → GALPAO MECANICA
+  { codGrupo: 30, de: [2, 3, 4], para: 6 },   // ELÉTRICA (CHICOTES) → GALPAO MECANICA
 ];
 
 /**
@@ -460,43 +466,121 @@ function sqlHoraExtra(ini: string, fim: string): string {
     )`;
 }
 
+/* ── Empréstimo de colaborador ───────────────────────────────
+   A produção empresta gente de um setor a outro por alguns dias. As
+   ATIVIDADES do emprestado já caem no setor que o recebeu (vêm do grupo de
+   quem apontou); o PONTO, não — sai do departamento de casa. Sem considerar o
+   empréstimo, o setor que recebe ganha atividade sem a hora paga (OPE inflado)
+   e o que cede fica com a hora paga sem atividade (OPE derrubado).
+
+   AD_EMPRESTFUN guarda o empréstimo (colaborador, departamento de destino,
+   período, STATUS). Nos dias de um empréstimo APROVADO, o ponto conta no
+   departamento de destino — com o setor, o galpão e a linha dele.
+
+   A tabela é criada à mão no Sankhya. Até ela existir, a SQL do OPE fica
+   exatamente a de antes: `emprestimoDisponivel` confere o dicionário uma vez
+   por sessão. Sem isso, publicar o painel antes de criar a tabela derrubaria
+   o OPE inteiro com ORA-00942. */
+const COLUNAS_EMPRESTIMO = ['CODEMPREST', 'CODEMP', 'CODFUNC', 'CODDEPDEST', 'DTINI', 'DTFIM', 'STATUS'] as const;
+
+let emprestimoCache: Promise<boolean> | null = null;
+
+/**
+ * A AD_EMPRESTFUN existe, com as colunas que a conta usa?
+ *
+ * Confere coluna a coluna (e não só a tabela): uma tabela criada com um nome
+ * de campo diferente quebraria a SQL do OPE com ORA-00904. Falha da própria
+ * consulta = "não disponível" nesta carga, e o cache é descartado para tentar
+ * de novo na próxima.
+ */
+export function emprestimoDisponivel(): Promise<boolean> {
+  if (!emprestimoCache) {
+    emprestimoCache = obterReg(`
+SELECT COUNT(DISTINCT COLUMN_NAME) AS QTD
+FROM ALL_TAB_COLUMNS
+WHERE TABLE_NAME = 'AD_EMPRESTFUN'
+  AND COLUMN_NAME IN (${COLUNAS_EMPRESTIMO.map(c => `'${c}'`).join(', ')})
+`.trim())
+      .then(rows => Number(rows[0]?.['QTD'] ?? rows[0]?.['qtd'] ?? 0) === COLUNAS_EMPRESTIMO.length)
+      .catch(() => { emprestimoCache = null; return false; });
+  }
+  return emprestimoCache;
+}
+
+/* Empréstimos APROVADOS que tocam a janela. Pequena: a busca por dia, abaixo,
+   roda contra ela e não contra a tabela inteira. */
+export function sqlCteEmprestimo(ini: string, fim: string): string {
+  return `EMP_APROV AS (
+  SELECT E.CODEMPREST, E.CODEMP, E.CODFUNC, E.CODDEPDEST,
+         TRUNC(E.DTINI) AS DTINI, TRUNC(E.DTFIM) AS DTFIM
+  FROM AD_EMPRESTFUN E
+  WHERE E.STATUS = 'A'
+    AND TRUNC(E.DTINI) <= ${oracleData(fim)}
+    AND TRUNC(E.DTFIM) >= ${oracleData(ini)}
+)`;
+}
+
+/**
+ * Departamento que conta para o colaborador `fun` no dia `dia`: o destino do
+ * empréstimo aprovado que cobre o dia, ou o de casa.
+ *
+ * Subconsulta escalar, e não JOIN: devolve SEMPRE um departamento. Se dois
+ * empréstimos aprovados cobrirem o mesmo dia (o app impede, mas o banco não),
+ * vale o mais recente — com JOIN, o ponto do dia contaria em dobro.
+ */
+function sqlDepEfetivo(fun: string, dia: string, comEmprestimo: boolean): string {
+  if (!comEmprestimo) return `${fun}.CODDEP`;
+  return `NVL((SELECT MAX(E.CODDEPDEST) KEEP (DENSE_RANK LAST ORDER BY E.CODEMPREST)
+           FROM EMP_APROV E
+          WHERE E.CODEMP  = ${fun}.CODEMP
+            AND E.CODFUNC = ${fun}.CODFUNC
+            AND ${dia} BETWEEN E.DTINI AND E.DTFIM), ${fun}.CODDEP)`;
+}
+
 /* ── SQL Ponto ───────────────────────────────────────────────
    HORAS_EXTRAS anda junto com as horas de ponto de proposito: assim o card da
    pagina herda exatamente os mesmos filtros (escopo, setor, maturacao) que
    "Horas de ponto", sem uma segunda consulta que possa divergir do recorte.
    O MAX() na subconsulta e so para escolher o unico valor de HE daquele
    funcionario naquele dia.                                                  */
-function buildSqlPonto(ini: string, fim: string, codGrupo: string): string {
+function buildSqlPonto(ini: string, fim: string, codGrupo: string, comEmprestimo = false): string {
+  /* A batida entra pelo departamento EFETIVO do dia (o de casa, ou o destino
+     de um empréstimo aprovado), calculado numa visão antes dos joins. Sem
+     empréstimo, CODDEP_EF é o próprio FUN.CODDEP e a conta é a de antes. */
   return `
 WITH
 ${SQL_CTE_GALPAO},
 ${SQL_CTE_DEP_SETOR},
-${SQL_CTE_DEP_LINHA}
+${SQL_CTE_DEP_LINHA}${comEmprestimo ? `,\n${sqlCteEmprestimo(ini, fim)}` : ''}
 SELECT LINHA, DATA, CODPLP, GALPAO, CODGRUPO, SETORMACRO,
   COUNT(*)          AS QTD_REGISTROS,
   COUNT(*) * 8      AS HORAS_PONTO,
   SUM(HE_HORAS)     AS HORAS_EXTRAS
 FROM (
   SELECT
-    PON.CODFUNC,
-    TO_CHAR(PON.DTPONTO, 'DD/MM/YYYY') AS DATA,
+    PB.CODFUNC,
+    TO_CHAR(PB.DTPONTO, 'DD/MM/YYYY') AS DATA,
     DL.LINHA,
     GL.CODPLP,
     GL.GALPAO,
     DSE.CODGRUPO,
     DSE.SETORMACRO,
     MAX(NVL(HE.HORAS, 0)) AS HE_HORAS
-  FROM AD_BATPONTO PON
-    JOIN TFPEQP EQ        ON EQ.CODEQP   = PON.CODEQP
-    JOIN TFPFUN FUN       ON FUN.CODFUNC = PON.CODFUNC
-    JOIN DEP_SETOR DSE    ON DSE.CODDEP  = FUN.CODDEP
-    JOIN GALPAO GL        ON GL.CODPLP   = DSE.CODPLP
-    LEFT JOIN DEP_LINHA DL ON DL.CODDEP  = FUN.CODDEP
-    LEFT JOIN ${sqlHoraExtra(ini, fim)} HE ON HE.CODFUNC = PON.CODFUNC AND HE.DT = TRUNC(PON.DTPONTO)
-  WHERE PON.DTPONTO BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}
-    AND EQ.AD_USADO     = '1'
-    AND DSE.CODGRUPO    = ${sqlCodGrupo(codGrupo)}
-  GROUP BY PON.CODFUNC, PON.DTPONTO, DL.LINHA, GL.CODPLP, GL.GALPAO, DSE.CODGRUPO, DSE.SETORMACRO
+  FROM (
+    SELECT PON.CODFUNC, PON.DTPONTO,
+           ${sqlDepEfetivo('FUN', 'TRUNC(PON.DTPONTO)', comEmprestimo)} AS CODDEP_EF
+    FROM AD_BATPONTO PON
+      JOIN TFPEQP EQ  ON EQ.CODEQP   = PON.CODEQP
+      JOIN TFPFUN FUN ON FUN.CODFUNC = PON.CODFUNC
+    WHERE PON.DTPONTO BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}
+      AND EQ.AD_USADO = '1'
+  ) PB
+    JOIN DEP_SETOR DSE     ON DSE.CODDEP = PB.CODDEP_EF
+    JOIN GALPAO GL         ON GL.CODPLP  = DSE.CODPLP
+    LEFT JOIN DEP_LINHA DL ON DL.CODDEP  = PB.CODDEP_EF
+    LEFT JOIN ${sqlHoraExtra(ini, fim)} HE ON HE.CODFUNC = PB.CODFUNC AND HE.DT = TRUNC(PB.DTPONTO)
+  WHERE DSE.CODGRUPO = ${sqlCodGrupo(codGrupo)}
+  GROUP BY PB.CODFUNC, PB.DTPONTO, DL.LINHA, GL.CODPLP, GL.GALPAO, DSE.CODGRUPO, DSE.SETORMACRO
 )
 GROUP BY LINHA, DATA, CODPLP, GALPAO, CODGRUPO, SETORMACRO
 ORDER BY DATA, CODPLP, LINHA
@@ -510,32 +594,44 @@ ORDER BY DATA, CODPLP, LINHA
                 aparece aqui é quem a tabela contou (8h por registro). A hora
                 extra é só exibição.
    SEM_PONTO  — AUDITORIA, fora de qualquer conta. Colaborador do mesmo
-                recorte (setor/galpão/maturação pelo departamento) que estava
-                admitido e não demitido no dia (mesma regra da tela de
-                Absenteísmo) e não tem batida válida. Só entram dias de
-                segunda a sexta em que alguém bateu ponto na fábrica — assim
+                recorte que estava admitido e não demitido no dia (mesma regra
+                da tela de Absenteísmo) e não tem batida válida. Só entram dias
+                de segunda a sexta em que alguém bateu ponto na fábrica — assim
                 fim de semana e feriado não viram falta de todo mundo.
                 Não distingue férias/afastamento: é "sem batida", não falta
-                justificada ou injustificada.                               */
-function buildSqlPontoDetalhe(ini: string, fim: string, r: RecorteOpe): string {
+                justificada ou injustificada.
+
+   O recorte (setor, galpão, maturação) vale para o departamento EFETIVO de
+   CADA DIA: com empréstimo, a mesma pessoa pode estar no recorte num dia e
+   fora dele no seguinte. Por isso as duas partes trabalham por pessoa × dia.
+   CAND só poupa o banco de cruzar a fábrica inteira com os dias: são as
+   pessoas que moram no recorte ou que têm empréstimo aprovado na janela.
+
+   EMPRESTADO_DE traz o departamento de casa quando o dia é de empréstimo — a
+   auditoria mostra por que alguém de fora aparece no setor.               */
+function buildSqlPontoDetalhe(ini: string, fim: string, r: RecorteOpe, comEmprestimo = false): string {
   const f: string[] = [];
   if (r.setor)  f.push(`AND DSE.CODGRUPO = ${sqlCodGrupo(r.setor)}`);
   if (r.codPlp) f.push(`AND GL.CODPLP = ${sqlCodPlp(r.codPlp)}`);
   if (r.excluirLinhas?.length) f.push(`AND NVL(DL.LINHA, '-') NOT IN (${sqlListaTexto(r.excluirLinhas)})`);
+  const filtros = f.map(x => `    ${x}`).join('\n');
+  /* Do departamento ao setor, galpão e linha — o mesmo caminho em todo lugar. */
+  const recorteDe = (dep: string) => `
+    JOIN DEP_SETOR DSE     ON DSE.CODDEP = ${dep}
+    JOIN GALPAO GL         ON GL.CODPLP  = DSE.CODPLP
+    LEFT JOIN DEP_LINHA DL ON DL.CODDEP  = ${dep}`;
   return `
 WITH
 ${SQL_CTE_GALPAO},
 ${SQL_CTE_DEP_SETOR},
-${SQL_CTE_DEP_LINHA},
-FUNC_REC AS (
-  SELECT FUN.CODFUNC, FUN.NOMEFUNC, FUN.DTADM, FUN.DTDEM, DEP.DESCRDEP, GL.GALPAO
-  FROM TFPFUN FUN
-    JOIN TFPDEP DEP        ON DEP.CODDEP = FUN.CODDEP
-    JOIN DEP_SETOR DSE     ON DSE.CODDEP = FUN.CODDEP
-    JOIN GALPAO GL         ON GL.CODPLP  = DSE.CODPLP
-    LEFT JOIN DEP_LINHA DL ON DL.CODDEP  = FUN.CODDEP
+${SQL_CTE_DEP_LINHA},${comEmprestimo ? `\n${sqlCteEmprestimo(ini, fim)},` : ''}
+CAND AS (
+  SELECT DISTINCT FUN.CODFUNC
+  FROM TFPFUN FUN${recorteDe('FUN.CODDEP')}
   WHERE 1 = 1
-${f.map(x => `    ${x}`).join('\n')}
+${filtros}${comEmprestimo ? `
+  UNION
+  SELECT E.CODFUNC FROM EMP_APROV E` : ''}
 ),
 PRESENCA AS (
   SELECT DISTINCT PON.CODFUNC, TRUNC(PON.DTPONTO) AS DIA
@@ -549,46 +645,72 @@ DIAS_UTEIS AS (
   FROM PRESENCA
   WHERE TO_CHAR(DIA, 'DY', 'NLS_DATE_LANGUAGE=ENGLISH') NOT IN ('SAT', 'SUN')
 ),
-HE AS ${sqlHoraExtra(ini, fim)}
-SELECT CODIGO, NOME, DEPARTAMENTO_PROD, GALPAO, DATA, HE_HORAS, SITUACAO
-FROM (
-  SELECT DISTINCT
-    F.CODFUNC                            AS CODIGO,
-    F.NOMEFUNC                           AS NOME,
-    F.DESCRDEP                           AS DEPARTAMENTO_PROD,
-    F.GALPAO                             AS GALPAO,
-    TO_CHAR(PON.DTPONTO, 'DD/MM/YYYY')   AS DATA,
-    TRUNC(PON.DTPONTO)                   AS DT_ORD,
-    NVL(HE.HORAS, 0)                     AS HE_HORAS,
-    'PONTO'                              AS SITUACAO
+HE AS ${sqlHoraExtra(ini, fim)},
+PONTO_DIA AS (
+  SELECT DISTINCT PON.CODFUNC, PON.DTPONTO, FUN.NOMEFUNC, FUN.CODDEP AS CODDEP_CASA,
+         ${sqlDepEfetivo('FUN', 'TRUNC(PON.DTPONTO)', comEmprestimo)} AS CODDEP_EF
   FROM AD_BATPONTO PON
-    JOIN TFPEQP EQ   ON EQ.CODEQP  = PON.CODEQP
-    JOIN FUNC_REC F  ON F.CODFUNC  = PON.CODFUNC
-    LEFT JOIN HE     ON HE.CODFUNC = PON.CODFUNC AND HE.DT = TRUNC(PON.DTPONTO)
+    JOIN TFPEQP EQ  ON EQ.CODEQP   = PON.CODEQP
+    JOIN TFPFUN FUN ON FUN.CODFUNC = PON.CODFUNC
+    JOIN CAND C     ON C.CODFUNC   = PON.CODFUNC
   WHERE PON.DTPONTO BETWEEN ${oracleData(ini)} AND ${oracleData(fim)}
     AND EQ.AD_USADO = '1'
+),
+SEM_DIA AS (
+  SELECT FUN.CODFUNC, FUN.NOMEFUNC, FUN.CODDEP AS CODDEP_CASA, D.DIA,
+         ${sqlDepEfetivo('FUN', 'D.DIA', comEmprestimo)} AS CODDEP_EF
+  FROM TFPFUN FUN
+    JOIN CAND C ON C.CODFUNC = FUN.CODFUNC
+    CROSS JOIN DIAS_UTEIS D
+  WHERE TRUNC(FUN.DTADM) <= D.DIA
+    AND (FUN.DTDEM IS NULL OR TRUNC(FUN.DTDEM) >= D.DIA)
+    AND NOT EXISTS (SELECT 1 FROM PRESENCA P WHERE P.CODFUNC = FUN.CODFUNC AND P.DIA = D.DIA)
+)
+SELECT CODIGO, NOME, DEPARTAMENTO_PROD, GALPAO, DATA, HE_HORAS, SITUACAO, EMPRESTADO_DE
+FROM (
+  SELECT DISTINCT
+    X.CODFUNC                            AS CODIGO,
+    X.NOMEFUNC                           AS NOME,
+    DEP.DESCRDEP                         AS DEPARTAMENTO_PROD,
+    GL.GALPAO                            AS GALPAO,
+    TO_CHAR(X.DTPONTO, 'DD/MM/YYYY')     AS DATA,
+    TRUNC(X.DTPONTO)                     AS DT_ORD,
+    NVL(HE.HORAS, 0)                     AS HE_HORAS,
+    'PONTO'                              AS SITUACAO,
+    CASA.DESCRDEP                        AS EMPRESTADO_DE
+  FROM PONTO_DIA X
+    JOIN TFPDEP DEP ON DEP.CODDEP = X.CODDEP_EF${recorteDe('X.CODDEP_EF')}
+    LEFT JOIN TFPDEP CASA ON CASA.CODDEP = X.CODDEP_CASA AND X.CODDEP_CASA <> X.CODDEP_EF
+    LEFT JOIN HE ON HE.CODFUNC = X.CODFUNC AND HE.DT = TRUNC(X.DTPONTO)
+  WHERE 1 = 1
+${filtros}
   UNION ALL
   SELECT
-    F.CODFUNC,
-    F.NOMEFUNC,
-    F.DESCRDEP,
-    F.GALPAO,
-    TO_CHAR(D.DIA, 'DD/MM/YYYY'),
-    D.DIA,
+    S.CODFUNC,
+    S.NOMEFUNC,
+    DEP.DESCRDEP,
+    GL.GALPAO,
+    TO_CHAR(S.DIA, 'DD/MM/YYYY'),
+    S.DIA,
     0,
-    'SEM_PONTO'
-  FROM FUNC_REC F
-    CROSS JOIN DIAS_UTEIS D
-  WHERE TRUNC(F.DTADM) <= D.DIA
-    AND (F.DTDEM IS NULL OR TRUNC(F.DTDEM) >= D.DIA)
-    AND NOT EXISTS (SELECT 1 FROM PRESENCA P WHERE P.CODFUNC = F.CODFUNC AND P.DIA = D.DIA)
+    'SEM_PONTO',
+    CASA.DESCRDEP
+  FROM SEM_DIA S
+    JOIN TFPDEP DEP ON DEP.CODDEP = S.CODDEP_EF${recorteDe('S.CODDEP_EF')}
+    LEFT JOIN TFPDEP CASA ON CASA.CODDEP = S.CODDEP_CASA AND S.CODDEP_CASA <> S.CODDEP_EF
+  WHERE 1 = 1
+${filtros}
 )
 ORDER BY NOME, DT_ORD
 `.trim();
 }
 
-/** `semPonto` = linha de auditoria: não bateu ponto no dia, fora da contagem. */
-export type PontoDetalheRow = { codigo: string; nome: string; departamento: string; galpao: string; data: string; heHoras: number; semPonto: boolean };
+/**
+ * `semPonto` = linha de auditoria: não bateu ponto no dia, fora da contagem.
+ * `emprestadoDe` = departamento de casa, quando o dia era de empréstimo (o
+ * `departamento` então é o de destino, onde a hora contou); vazio no resto.
+ */
+export type PontoDetalheRow = { codigo: string; nome: string; departamento: string; galpao: string; data: string; heHoras: number; semPonto: boolean; emprestadoDe: string };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapPontoDetalhe(r: Record<string, any>): PontoDetalheRow {
@@ -600,6 +722,7 @@ function mapPontoDetalhe(r: Record<string, any>): PontoDetalheRow {
     data:         String(r['DATA']              ?? r['data']              ?? ''),
     heHoras:      Number(r['HE_HORAS']          ?? r['he_horas']          ?? 0) || 0,
     semPonto:     String(r['SITUACAO']          ?? r['situacao']          ?? '') === 'SEM_PONTO',
+    emprestadoDe: String(r['EMPRESTADO_DE']     ?? r['emprestado_de']     ?? ''),
   };
 }
 
@@ -716,20 +839,34 @@ function mapPonto(r: Record<string, any>): RawPontoRow {
 export async function getOpeDados(
   ini: string,
   fim: string,
-): Promise<{ ativos: RawAtivRow[]; pontos: RawPontoRow[]; grupos: GrupoProducao[]; galpoes: GalpaoOpe[] }> {
-  const [grupos, galpoes] = await Promise.all([getGruposProducao(), getGalpoes()]);
-  const queries = grupos.flatMap(g => [
-    obterReg(buildSqlAtividades(ini, fim, g.codGrupo)),
-    obterReg(buildSqlPonto(ini, fim, g.codGrupo)),
+): Promise<{
+  ativos: RawAtivRow[];
+  pontos: RawPontoRow[];
+  grupos: GrupoProducao[];
+  galpoes: GalpaoOpe[];
+  /** Preenchido quando a conta com empréstimo falhou e o ponto saiu SEM empréstimos. */
+  avisoEmprestimo: string | null;
+}> {
+  const [grupos, galpoes, comEmprestimo] = await Promise.all([getGruposProducao(), getGalpoes(), emprestimoDisponivel()]);
+  const consultarPonto = (comEmp: boolean) =>
+    Promise.all(grupos.map(g => obterReg(buildSqlPonto(ini, fim, g.codGrupo, comEmp))));
+  /* Rede de segurança: se a SQL do ponto COM empréstimo falhar no banco, o
+     ponto é refeito sem empréstimo e a tela recebe o aviso. Assim um erro na
+     parte nova nunca derruba o OPE inteiro — o pior caso é a conta de antes. */
+  let avisoEmprestimo: string | null = null;
+  const [resAtiv, resPonto] = await Promise.all([
+    Promise.all(grupos.map(g => obterReg(buildSqlAtividades(ini, fim, g.codGrupo)))),
+    consultarPonto(comEmprestimo).catch((e: unknown) => {
+      if (!comEmprestimo) throw e;
+      avisoEmprestimo = `Os empréstimos de colaborador ficaram fora desta conta: a consulta falhou (${e instanceof Error ? e.message : String(e)}). O ponto abaixo é o de sempre, cada um no seu departamento.`;
+      return consultarPonto(false);
+    }),
   ]);
-  const results = await Promise.all(queries);
   const ativos: RawAtivRow[]  = [];
   const pontos: RawPontoRow[] = [];
-  for (let i = 0; i < results.length; i += 2) {
-    results[i].forEach(r => ativos.push(mapAtiv(r)));
-    results[i + 1].forEach(r => pontos.push(mapPonto(r)));
-  }
-  return { ativos, pontos, grupos, galpoes };
+  resAtiv.forEach(rows => rows.forEach(r => ativos.push(mapAtiv(r))));
+  resPonto.forEach(rows => rows.forEach(r => pontos.push(mapPonto(r))));
+  return { ativos, pontos, grupos, galpoes, avisoEmprestimo };
 }
 
 /** Funcionários que bateram ponto no recorte — alimenta o popup de detalhe. */
@@ -738,8 +875,17 @@ export async function getPontoDetalhe(
   fim: string,
   recorte: RecorteOpe,
 ): Promise<PontoDetalheRow[]> {
-  const rows = await obterReg(buildSqlPontoDetalhe(ini, fim, recorte));
-  return rows.map(mapPontoDetalhe);
+  const comEmprestimo = await emprestimoDisponivel();
+  try {
+    const rows = await obterReg(buildSqlPontoDetalhe(ini, fim, recorte, comEmprestimo));
+    return rows.map(mapPontoDetalhe);
+  } catch (e) {
+    /* Mesma rede de segurança do agregado: sem empréstimo, a lista ainda sai. */
+    if (!comEmprestimo) throw e;
+    console.warn('[opeService] detalhe de ponto com empréstimo falhou; refeito sem:', e);
+    const rows = await obterReg(buildSqlPontoDetalhe(ini, fim, recorte, false));
+    return rows.map(mapPontoDetalhe);
+  }
 }
 
 /**
