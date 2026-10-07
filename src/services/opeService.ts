@@ -626,12 +626,17 @@ ${SQL_CTE_GALPAO},
 ${SQL_CTE_DEP_SETOR},
 ${SQL_CTE_DEP_LINHA},${comEmprestimo ? `\n${sqlCteEmprestimo(ini, fim)},` : ''}
 CAND AS (
+  -- Sem UNION de propósito: empilhar TFPFUN.CODFUNC com AD_EMPRESTFUN.CODFUNC
+  -- exige o mesmo tipo nas duas colunas (ORA-01790); o EXISTS só compara.
+  -- Sem empréstimo, os LEFT JOIN + "galpão encontrado" equivalem aos JOIN de antes.
   SELECT DISTINCT FUN.CODFUNC
-  FROM TFPFUN FUN${recorteDe('FUN.CODDEP')}
-  WHERE 1 = 1
-${filtros}${comEmprestimo ? `
-  UNION
-  SELECT E.CODFUNC FROM EMP_APROV E` : ''}
+  FROM TFPFUN FUN
+    LEFT JOIN DEP_SETOR DSE ON DSE.CODDEP = FUN.CODDEP
+    LEFT JOIN GALPAO GL     ON GL.CODPLP  = DSE.CODPLP
+    LEFT JOIN DEP_LINHA DL  ON DL.CODDEP  = FUN.CODDEP
+  WHERE (GL.CODPLP IS NOT NULL
+${filtros})${comEmprestimo ? `
+     OR EXISTS (SELECT 1 FROM EMP_APROV E WHERE E.CODEMP = FUN.CODEMP AND E.CODFUNC = FUN.CODFUNC)` : ''}
 ),
 PRESENCA AS (
   SELECT DISTINCT PON.CODFUNC, TRUNC(PON.DTPONTO) AS DIA
@@ -647,7 +652,11 @@ DIAS_UTEIS AS (
 ),
 HE AS ${sqlHoraExtra(ini, fim)},
 PONTO_DIA AS (
-  SELECT DISTINCT PON.CODFUNC, PON.DTPONTO, FUN.NOMEFUNC, FUN.CODDEP AS CODDEP_CASA,
+  -- CODFUNC sai do TFPFUN, como no SEM_DIA: as duas metades do UNION ALL têm
+  -- de ter o MESMO tipo, e o CODFUNC da AD_BATPONTO não tem o mesmo do TFPFUN
+  -- (ORA-01790). O da batida segue só para cruzar com a hora extra, que é
+  -- ponto contra ponto como sempre foi.
+  SELECT DISTINCT FUN.CODFUNC, PON.CODFUNC AS CODFUNC_PONTO, PON.DTPONTO, FUN.NOMEFUNC, FUN.CODDEP AS CODDEP_CASA,
          ${sqlDepEfetivo('FUN', 'TRUNC(PON.DTPONTO)', comEmprestimo)} AS CODDEP_EF
   FROM AD_BATPONTO PON
     JOIN TFPEQP EQ  ON EQ.CODEQP   = PON.CODEQP
@@ -681,7 +690,7 @@ FROM (
   FROM PONTO_DIA X
     JOIN TFPDEP DEP ON DEP.CODDEP = X.CODDEP_EF${recorteDe('X.CODDEP_EF')}
     LEFT JOIN TFPDEP CASA ON CASA.CODDEP = X.CODDEP_CASA AND X.CODDEP_CASA <> X.CODDEP_EF
-    LEFT JOIN HE ON HE.CODFUNC = X.CODFUNC AND HE.DT = TRUNC(X.DTPONTO)
+    LEFT JOIN HE ON HE.CODFUNC = X.CODFUNC_PONTO AND HE.DT = TRUNC(X.DTPONTO)
   WHERE 1 = 1
 ${filtros}
   UNION ALL
